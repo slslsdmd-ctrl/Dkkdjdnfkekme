@@ -1,0 +1,2789 @@
+import asyncio
+import random
+import sqlite3
+from datetime import datetime, timedelta
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import ChatPermissions, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
+import os
+import re
+import aiohttp
+import html
+
+TOKEN = os.getenv('BOT_TOKEN')
+BOT_NAME = "Fable"
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+YOUR_ID = 8039111975
+
+# ========== БАЗА ДАННЫХ ==========
+def init_db():
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS messages
+                 (id INTEGER PRIMARY KEY, chat_id INTEGER, user_id INTEGER, 
+                  username TEXT, text TEXT, date TEXT, coins INTEGER DEFAULT 0, daily_coins INTEGER DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS warns
+                 (user_id INTEGER, chat_id INTEGER, count INTEGER, 
+                  reason TEXT, date TEXT, warned_by INTEGER, until_date TIMESTAMP)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS rp_roles
+                 (user_id INTEGER, chat_id INTEGER, level INTEGER DEFAULT 1,
+                  PRIMARY KEY (user_id, chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS user_join_date
+                 (user_id INTEGER, chat_id INTEGER, join_date TEXT,
+                  PRIMARY KEY (user_id, chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS duels
+                 (chat_id INTEGER, challenger INTEGER, opponent INTEGER, turn INTEGER, aim_bonus INTEGER, message_id INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS chat_stats
+                 (chat_id INTEGER PRIMARY KEY, msg_count INTEGER DEFAULT 0, last_auto_time TIMESTAMP)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS settings
+                 (chat_id INTEGER PRIMARY KEY, welcome_text TEXT, rules_text TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bans
+                 (user_id INTEGER, chat_id INTEGER, until_date TIMESTAMP)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS awards
+                 (user_id INTEGER, chat_id INTEGER, award_name TEXT, given_by INTEGER, date TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS reputation
+                 (user_id INTEGER, chat_id INTEGER, rep INTEGER DEFAULT 0,
+                  PRIMARY KEY (user_id, chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS marriages
+                 (user_id INTEGER, chat_id INTEGER, spouse_id INTEGER, date TEXT,
+                  PRIMARY KEY (user_id, chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS clans
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, name TEXT, owner_id INTEGER, members TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bans_list
+                 (user_id INTEGER, chat_id INTEGER, banned_by INTEGER, reason TEXT, date TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS mutes_list
+                 (user_id INTEGER, chat_id INTEGER, muted_by INTEGER, reason TEXT, date TEXT, until_date TIMESTAMP)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS chat_settings
+                 (chat_id INTEGER PRIMARY KEY, anti_mat INTEGER DEFAULT 0, 
+                  anti_links INTEGER DEFAULT 0, anti_spam INTEGER DEFAULT 0, 
+                  captcha INTEGER DEFAULT 0)""")
+    conn.commit()
+    conn.close()
+
+async def save_message(chat_id, user_id, username, text):
+    if not text or len(text) > 1000:
+        return
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (chat_id, user_id, username, text, date) VALUES (?,?,?,?,?)",
+              (chat_id, user_id, username, text[:500], datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+async def save_join_date(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO user_join_date (user_id, chat_id, join_date) VALUES (?,?,?)",
+              (user_id, chat_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+async def get_join_date(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT join_date FROM user_join_date WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+async def get_role(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT level FROM rp_roles WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 1
+
+async def set_role(user_id, chat_id, level):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO rp_roles (user_id, chat_id, level) VALUES (?,?,?)", (user_id, chat_id, level))
+    conn.commit()
+    conn.close()
+
+# ========== МОНЕТЫ ==========
+async def add_coins(user_id, chat_id, amount):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT coins FROM messages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    if row:
+        new_amount = row[0] + amount
+        c.execute("UPDATE messages SET coins = ? WHERE user_id = ? AND chat_id = ?", (new_amount, user_id, chat_id))
+    else:
+        c.execute("INSERT INTO messages (user_id, chat_id, coins) VALUES (?,?,?)", (user_id, chat_id, amount))
+    conn.commit()
+    conn.close()
+
+async def remove_coins(user_id, chat_id, amount):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT coins FROM messages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    if row:
+        new_amount = max(0, row[0] - amount)
+        c.execute("UPDATE messages SET coins = ? WHERE user_id = ? AND chat_id = ?", (new_amount, user_id, chat_id))
+    conn.commit()
+    conn.close()
+
+async def get_coins(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT coins FROM messages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+async def add_daily_coins(user_id, chat_id, amount):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("UPDATE messages SET daily_coins = daily_coins + ? WHERE user_id = ? AND chat_id = ?", (amount, user_id, chat_id))
+    if c.rowcount == 0:
+        c.execute("INSERT INTO messages (user_id, chat_id, daily_coins) VALUES (?,?,?)", (user_id, chat_id, amount))
+    conn.commit()
+    conn.close()
+
+async def get_daily_coins(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT daily_coins FROM messages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+# ========== РЕПУТАЦИЯ ==========
+async def add_rep(user_id, chat_id, amount):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO reputation (user_id, chat_id, rep) VALUES (?,?, COALESCE((SELECT rep + ? FROM reputation WHERE user_id = ? AND chat_id = ?), ?))",
+              (user_id, chat_id, amount, user_id, chat_id, amount))
+    conn.commit()
+    conn.close()
+
+async def get_rep(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT rep FROM reputation WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+# ========== БРАКИ ==========
+async def get_marriage(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT spouse_id FROM marriages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+async def set_marriage(user_id, chat_id, spouse_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO marriages (user_id, chat_id, spouse_id, date) VALUES (?,?,?,?)",
+              (user_id, chat_id, spouse_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+async def remove_marriage(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM marriages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    conn.commit()
+    conn.close()
+
+async def get_all_marriages(chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT user_id, spouse_id FROM marriages WHERE chat_id = ?", (chat_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# ========== КЛАНЫ ==========
+async def get_clan_members(clan_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT members FROM clans WHERE id = ?", (clan_id,))
+    row = c.fetchone()
+    conn.close()
+    if row and row[0]:
+        return row[0].split(",") if row[0] else []
+    return []
+
+async def get_user_clan(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT id, name, owner_id, members FROM clans WHERE chat_id = ? AND members LIKE ?", (chat_id, f"%{user_id}%"))
+    row = c.fetchone()
+    conn.close()
+    return row if row else None
+
+# ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
+async def add_warn(user_id, chat_id, reason, warned_by, duration=None):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM warns WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    count = c.fetchone()[0] + 1
+    until_date = None
+    if duration:
+        until_date = (datetime.now() + timedelta(seconds=duration)).isoformat()
+    c.execute("INSERT INTO warns (user_id, chat_id, count, reason, date, warned_by, until_date) VALUES (?,?,?,?,?,?,?)",
+              (user_id, chat_id, count, reason, datetime.now().isoformat(), warned_by, until_date))
+    conn.commit()
+    conn.close()
+    if count >= 5:
+        await bot.ban_chat_member(chat_id, user_id)
+        return f"⚠️ {count}/5 варнов. Пользователь исключён."
+    if duration:
+        return f"⚠️ Предупреждение {count}/5: {reason} (снимется через {duration//60} мин.)"
+    return f"⚠️ Предупреждение {count}/5: {reason}"
+
+async def remove_warn(user_id, chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT count, until_date FROM warns WHERE user_id = ? AND chat_id = ? ORDER BY date DESC LIMIT 1", (user_id, chat_id))
+    row = c.fetchone()
+    if row:
+        c.execute("DELETE FROM warns WHERE user_id = ? AND chat_id = ? AND count = ?", (user_id, chat_id, row[0]))
+        conn.commit()
+        conn.close()
+        return True
+    conn.close()
+    return False
+
+async def get_user_message_count(chat_id, user_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+async def get_random_message(chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT text FROM messages WHERE chat_id = ? AND text != '' AND user_id != ? ORDER BY RANDOM() LIMIT 1", (chat_id, bot.id))
+    row = c.fetchone()
+    conn.close()
+    if row and row[0]:
+        return row[0]
+    return None
+
+async def get_name(user_id):
+    try:
+        user = await bot.get_chat(user_id)
+        return f"@{user.username}" if user.username else user.first_name
+    except:
+        return f"id{user_id}"
+
+def parse_time(time_str):
+    time_str = time_str.lower().strip()
+    if time_str.endswith('m'):
+        return int(time_str[:-1]) * 60
+    elif time_str.endswith('h'):
+        return int(time_str[:-1]) * 3600
+    elif time_str.endswith('d'):
+        return int(time_str[:-1]) * 86400
+    elif time_str.endswith('s'):
+        return int(time_str[:-1])
+    else:
+        try:
+            return int(time_str)
+        except:
+            return 86400
+
+async def get_bot_stats():
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(DISTINCT chat_id) FROM messages")
+    chats = c.fetchone()[0]
+    c.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
+    users = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM messages")
+    msgs = c.fetchone()[0]
+    conn.close()
+    return chats, users, msgs
+
+async def get_welcome(chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT welcome_text FROM settings WHERE chat_id = ?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+async def set_welcome(chat_id, text):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (chat_id, welcome_text, rules_text) VALUES (?,?, COALESCE((SELECT rules_text FROM settings WHERE chat_id = ?), NULL))", 
+              (chat_id, text, chat_id))
+    conn.commit()
+    conn.close()
+
+async def get_rules(chat_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT rules_text FROM settings WHERE chat_id = ?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+async def set_rules(chat_id, text):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (chat_id, rules_text, welcome_text) VALUES (?,?, COALESCE((SELECT welcome_text FROM settings WHERE chat_id = ?), NULL))", 
+              (chat_id, text, chat_id))
+    conn.commit()
+    conn.close()
+
+# ========== НАСТРОЙКИ ЧАТА ==========
+async def get_chat_setting(chat_id, setting):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute(f"SELECT {setting} FROM chat_settings WHERE chat_id = ?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+async def set_chat_setting(chat_id, setting, value):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute(f"INSERT OR REPLACE INTO chat_settings (chat_id, {setting}) VALUES (?,?)", (chat_id, value))
+    conn.commit()
+    conn.close()
+
+# ========== АВТО-СООБЩЕНИЯ ==========
+chat_msg_count = {}
+chat_last_auto = {}
+
+async def check_auto_message(chat_id: int):
+    now = datetime.now()
+    if chat_id in chat_last_auto:
+        time_diff = now - chat_last_auto[chat_id]
+        if time_diff.total_seconds() < 10800:
+            return
+    if chat_id in chat_msg_count:
+        if chat_msg_count[chat_id] >= random.randint(15, 20):
+            chat_msg_count[chat_id] = 0
+            chat_last_auto[chat_id] = now
+            phrase = await get_random_message(chat_id)
+            if phrase:
+                await bot.send_message(chat_id, f"📖 {phrase}")
+
+# ========== ПЕРЕМЕННЫЕ ДЛЯ ИГР ==========
+cube_games = {}
+active_duels = set()
+active_knb = set()
+knb_choices = {}
+active_coin = {}
+coin_choices = {}
+roulette_games = {}
+daily_cooldown = {}
+work_cooldown = {}
+rob_person_cooldown = {}
+bank_rob_cooldown = {}
+rep_cooldown = {}
+marriage_proposals = {}
+
+# ========== ДУЭЛЬ ==========
+async def duel_loop(chat_id, challenger, opponent, message_id):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO duels (chat_id, challenger, opponent, turn, aim_bonus, message_id) VALUES (?,?,?,?,?,?)",
+              (chat_id, challenger, opponent, challenger, 0, message_id))
+    conn.commit()
+    conn.close()
+    active_duels.add((chat_id, challenger, opponent))
+    await send_duel_turn(chat_id, challenger, opponent, 0, challenger)
+
+async def send_duel_turn(chat_id, challenger, opponent, aim_bonus, turn):
+    turn_name = "Первый игрок" if turn == challenger else "Второй игрок"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔫 СТРЕЛЯТЬ", callback_data=f"duel_shoot_{chat_id}_{turn}"),
+            InlineKeyboardButton(text="🎯 ПРИЦЕЛИТЬСЯ", callback_data=f"duel_aim_{chat_id}_{turn}")
+        ],
+        [
+            InlineKeyboardButton(text="⏭️ ПРОПУСТИТЬ", callback_data=f"duel_skip_{chat_id}_{turn}")
+        ]
+    ])
+    await bot.send_message(
+        chat_id,
+        f"🔫 **ДУЭЛЬ!**\n\n"
+        f"⚔️ {await get_name(challenger)} против {await get_name(opponent)}\n"
+        f"🎲 Ход: **{turn_name}**\n"
+        f"🎯 Бонус прицела: +{aim_bonus*10}%\n\n"
+        f"👇 Выбери действие:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=keyboard
+    )
+
+async def end_duel(chat_id, winner, loser, reason):
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM duels WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+    active_duels.discard((chat_id, winner, loser))
+    active_duels.discard((chat_id, loser, winner))
+    await bot.send_message(
+        chat_id,
+        f"🔫 **ДУЭЛЬ ЗАВЕРШЕНА!**\n\n"
+        f"🏆 Победитель: {await get_name(winner)}!\n"
+        f"💀 {reason}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+def get_knb_result(choice1, choice2):
+    if choice1 == choice2:
+        return "🤝 Ничья!"
+    wins = {"камень": "ножницы", "ножницы": "бумага", "бумага": "камень"}
+    if wins[choice1] == choice2:
+        return "🏆 Победил первый игрок!"
+    else:
+        return "🏆 Победил второй игрок!"
+
+async def get_target_user(message: types.Message):
+    if message.reply_to_message:
+        return message.reply_to_message.from_user.id
+    args = message.text.split()
+    if len(args) > 1:
+        target = args[1].replace("@", "")
+        try:
+            member = await message.chat.get_member((await bot.get_chat_member(message.chat.id, target)).user.id)
+            return member.user.id
+        except:
+            return None
+    return None
+
+# ========== РП КОМАНДЫ ==========
+rp_actions = {
+    "убить": {"emoji": "🔪", "action": "убил"},
+    "расстрелять": {"emoji": "🔫", "action": "расстрелял"},
+    "ударить": {"emoji": "👊", "action": "ударил"},
+    "избить": {"emoji": "🤜", "action": "избил"},
+    "пнуть": {"emoji": "🦶", "action": "пнул"},
+    "задушить": {"emoji": "🫱", "action": "задушил"},
+    "уебать": {"emoji": "💥", "action": "уебал"},
+    "отравить": {"emoji": "☠️", "action": "отравил"},
+    "сжечь": {"emoji": "🔥", "action": "сжёг"},
+    "взорвать": {"emoji": "💣", "action": "взорвал"},
+    "шмальнуть": {"emoji": "🔫", "action": "шмальнул в"},
+    "отстрелить": {"emoji": "💀", "action": "отстрелил"},
+    "порвать": {"emoji": "💔", "action": "порвал"},
+    "ушатать": {"emoji": "🤯", "action": "ушатал"},
+    "уничтожить": {"emoji": "💥", "action": "уничтожил"},
+    "кастрировать": {"emoji": "✂️", "action": "кастрировал"},
+    "отрубить": {"emoji": "🪓", "action": "отрубил"},
+    "выпороть": {"emoji": "🏏", "action": "выпорол"},
+    "закопать": {"emoji": "🪦", "action": "закопал"},
+    "выкопать": {"emoji": "⛏️", "action": "выкопал"},
+    "арестовать": {"emoji": "🚔", "action": "арестовал"},
+    "наказать": {"emoji": "⚖️", "action": "наказал"},
+    "унизить": {"emoji": "😤", "action": "унизил"},
+    "наорать": {"emoji": "📢", "action": "наорал на"},
+    "послать_нах": {"emoji": "🖕", "action": "послал нах"},
+    "шлёпнуть": {"emoji": "🖐️", "action": "шлёпнул"},
+    "ущипнуть": {"emoji": "🤏", "action": "ущипнул"},
+    "кусь": {"emoji": "🦷", "action": "кусьнул"},
+    "укусить": {"emoji": "🦷", "action": "укусил"},
+    "лизать": {"emoji": "👅", "action": "лизал"},
+    "облизать": {"emoji": "👅", "action": "облизал"},
+    "плюнуть": {"emoji": "💦", "action": "плюнул в"},
+    "кинуть": {"emoji": "🤾", "action": "кинул"},
+    "схватить": {"emoji": "🫳", "action": "схватил"},
+    "дать_пять": {"emoji": "🖐️", "action": "дал пять"},
+    "пожать_руку": {"emoji": "🤝", "action": "пожал руку"},
+    "испугать": {"emoji": "👻", "action": "испугал"},
+    "рассмешить": {"emoji": "😂", "action": "рассмешил"},
+    "похвалить": {"emoji": "👍", "action": "похвалил"},
+    "поздравить": {"emoji": "🎉", "action": "поздравил"},
+    "заставить": {"emoji": "⛓️", "action": "заставил"},
+    "продать": {"emoji": "💰", "action": "продал"},
+    "связать": {"emoji": "⛓️", "action": "связал"},
+    "повесить": {"emoji": "🪢", "action": "повесил"},
+    "предложить": {"emoji": "💍", "action": "предложил"},
+    "пожелать": {"emoji": "✨", "action": "пожелал"},
+    "выпить": {"emoji": "🍺", "action": "выпил за"},
+    "обнять": {"emoji": "🤗", "action": "обнял"},
+    "поцеловать": {"emoji": "😘", "action": "поцеловал"},
+    "погладить": {"emoji": "🖐️", "action": "погладил"},
+    "пощекотать": {"emoji": "🤭", "action": "пощекотал"},
+    "подмигнуть": {"emoji": "😉", "action": "подмигнул"},
+    "прижать": {"emoji": "🤗", "action": "прижал к себе"},
+    "потрогать": {"emoji": "👉", "action": "потрогал"},
+    "понюхать": {"emoji": "👃", "action": "понюхал"},
+    "засосать": {"emoji": "💋", "action": "засосал"},
+    "отдаться": {"emoji": "❤️", "action": "отдался"},
+    "пригласить_на_чай": {"emoji": "🍵", "action": "пригласил на чай"},
+    "покормить": {"emoji": "🍕", "action": "покормил"},
+    "извиниться": {"emoji": "🙏", "action": "извинился перед"},
+    "поговорить": {"emoji": "💬", "action": "поговорил с"},
+    "сделать_комплимент": {"emoji": "🌟", "action": "сделал комплимент"},
+    "подарить_подарок": {"emoji": "🎁", "action": "подарил подарок"},
+    "устроить_сюрприз": {"emoji": "🎆", "action": "устроил сюрприз"},
+    "сходить_в_кино": {"emoji": "🎬", "action": "сходил в кино с"},
+    "погулять": {"emoji": "🚶", "action": "погулял с"},
+    "поделиться_едой": {"emoji": "🍱", "action": "поделился едой с"},
+    "рассказать_анекдот": {"emoji": "😂", "action": "рассказал анекдот"},
+    "сделать_завтрак": {"emoji": "🍳", "action": "сделал завтрак"},
+    "кинуть_мем": {"emoji": "🖼️", "action": "кинул мем"},
+    "поговорить_по_душам": {"emoji": "💕", "action": "поговорил по душам с"},
+    "обнимать": {"emoji": "🤗", "action": "обнимает"},
+    "выебать": {"emoji": "🔞", "action": "выебал"},
+    "трахнуть": {"emoji": "🔞", "action": "трахнул"},
+    "изнасиловать": {"emoji": "🔞", "action": "изнасиловал"},
+    "делать_секс": {"emoji": "🔞", "action": "делал секс с"},
+    "отсосать": {"emoji": "🔞", "action": "отсосал у"},
+    "лизнуть": {"emoji": "👅", "action": "лизнул"},
+}
+
+# ========== ОСНОВНОЙ ОБРАБОТЧИК ==========
+@dp.message()
+async def handle_all_messages(message: types.Message):
+    if not message.text:
+        return
+    
+    # ===== ПРИНУДИТЕЛЬНАЯ ВЫДАЧА 10 УРОВНЯ =====
+    try:
+        chat = await bot.get_chat(message.chat.id)
+        creator = chat.creator
+        if creator:
+            await set_role(creator.id, message.chat.id, 10)
+    except:
+        pass
+    
+    if message.from_user.id == YOUR_ID:
+        await set_role(message.from_user.id, message.chat.id, 10)
+    
+    try:
+        chat = await bot.get_chat(message.chat.id)
+        admins = await bot.get_chat_administrators(message.chat.id)
+        for admin in admins:
+            if admin.user.id == message.from_user.id:
+                await set_role(message.from_user.id, message.chat.id, 10)
+                break
+    except:
+        pass
+    
+    # ==== СОХРАНЯЕМ СООБЩЕНИЯ И ДАЁМ МОНЕТЫ ====
+    if message.chat.type in ["group", "supergroup"]:
+        await save_message(message.chat.id, message.from_user.id, 
+                          message.from_user.username, message.text)
+        
+        await add_coins(message.from_user.id, message.chat.id, 1)
+        
+        if message.from_user.id != bot.id:
+            chat_id = message.chat.id
+            chat_msg_count[chat_id] = chat_msg_count.get(chat_id, 0) + 1
+            await check_auto_message(chat_id)
+    
+    # ==== НОВЫЙ УЧАСТНИК ====
+    if message.new_chat_members:
+        for user in message.new_chat_members:
+            if user.id == bot.id:
+                adder_id = message.from_user.id
+                await set_role(adder_id, message.chat.id, 10)
+                await bot.send_message(
+                    message.chat.id,
+                    f"👑 {await get_name(adder_id)} добавил бота и получил 10 уровень!"
+                )
+                
+                try:
+                    admins = await bot.get_chat_administrators(message.chat.id)
+                    admin_names = []
+                    for admin in admins:
+                        await set_role(admin.user.id, message.chat.id, 10)
+                        admin_names.append(f"@{admin.user.username or admin.user.first_name}")
+                    
+                    await bot.send_message(
+                        message.chat.id,
+                        f"👑 Всем администраторам выдан 10 уровень!\n👥 {', '.join(admin_names[:5])}"
+                    )
+                except:
+                    pass
+                
+                await bot.send_message(
+                    message.chat.id,
+                    f"👑 **{BOT_NAME} активирован!**\n\n"
+                    f"🎯 Команды: `команды` для списка",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                continue
+            
+            if user.id == YOUR_ID:
+                await set_role(user.id, message.chat.id, 10)
+                await bot.send_message(
+                    message.chat.id,
+                    f"👑 Супер-админ @{user.username or user.first_name} получил 10 уровень!"
+                )
+                continue
+            
+            await save_join_date(user.id, message.chat.id)
+            welcome_text = await get_welcome(message.chat.id)
+            if welcome_text:
+                welcome_text = welcome_text.replace("{имя}", user.first_name)
+                await message.reply(welcome_text, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ==== ЛИЧНЫЕ СООБЩЕНИЯ (СТАТИСТИКА) ====
+    if message.chat.type == "private":
+        if message.text and message.text.lower() == "/статистика":
+            if message.from_user.id == YOUR_ID:
+                chats, users, msgs = await get_bot_stats()
+                await message.reply(
+                    f"📊 **Статистика {BOT_NAME}:**\n\n"
+                    f"📋 Чатов с ботом: {chats}\n"
+                    f"👥 Всего пользователей: {users}\n"
+                    f"💬 Всего сообщений: {msgs}\n"
+                    f"👑 Твой уровень: 10 (супер-админ)",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await message.reply("❌ У тебя нет доступа к статистике!")
+            return
+    
+    # ==== КОМАНДЫ В ГРУППЕ ====
+    text = message.text.strip()
+    text_lower = text.lower()
+    
+    # ===== РП КОМАНДЫ =====
+    for cmd, data in rp_actions.items():
+        if text_lower.startswith(cmd):
+            if not message.reply_to_message:
+                await message.reply(f"ℹ️ Ответь на сообщение человека и напиши `{cmd}`")
+                return
+            
+            target_id = message.reply_to_message.from_user.id
+            target_name = await get_name(target_id)
+            user_name = message.from_user.first_name
+            
+            if target_id == message.from_user.id:
+                await message.reply(f"❌ Нельзя {cmd} самого себя!")
+                return
+            
+            if cmd in ["поцеловать", "обнять", "погладить", "пощекотать", "подмигнуть", "прижать", "потрогать"]:
+                response = f"{data['emoji']} **{user_name}** {data['action']} **{target_name}**! 🥰"
+            elif cmd in ["убить", "изнасиловать", "трахнуть", "выебать", "избить", "ударить", "пнуть", "задушить", "уебать"]:
+                response = f"{data['emoji']} **{user_name}** {data['action']} **{target_name}**! Жестоко! 😱"
+            else:
+                response = f"{data['emoji']} **{user_name}** {data['action']} **{target_name}**!"
+            
+            await message.reply(response, parse_mode=ParseMode.MARKDOWN)
+            return
+    
+    # ===== +ПРИВЕТСТВИЕ =====
+    if text.startswith("+приветствие"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply("ℹ️ Использование: `+приветствие [текст]`\n\nПеременные: `{имя}`, `{username}`")
+            return
+        await set_welcome(message.chat.id, parts[1])
+        await message.reply(f"✅ Приветствие установлено!")
+        return
+    
+    # ===== +ПРАВИЛА =====
+    if text.startswith("+правила"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply("ℹ️ Использование: `+правила [текст]`")
+            return
+        await set_rules(message.chat.id, parts[1])
+        await message.reply(f"✅ Правила установлены!")
+        return
+    
+    # ===== ПРАВИЛА =====
+    if text_lower == "правила":
+        rules = await get_rules(message.chat.id)
+        if rules:
+            await message.reply(f"📋 **Правила чата:**\n\n{rules}", parse_mode=ParseMode.MARKDOWN)
+        else:
+            await message.reply("📋 Правила не установлены.")
+        return
+    
+    # ===== КОМАНДЫ =====
+    if text_lower == "команды":
+        await message.reply(
+            f"📋 **Все команды {BOT_NAME}:**\n\n"
+            f"**💰 Экономика:**\n"
+            f"`бонус` — ежедневный бонус 100 монет\n"
+            f"`работа` — заработать 10-30 монет (5 мин)\n"
+            f"`ограбить человека` — ответь на сообщение (12ч кд)\n"
+            f"`ограбить банк` — ограбить банк (6ч кд)\n"
+            f"`казино [ставка]` — угадай число (x2)\n"
+            f"`слоты [ставка]` — слоты (x0.1, x0.5, x1, x2, x5, x10, x20)\n"
+            f"`ставка [сумма] [чет/нечет]` — ставка на чёт/нечет (x1.5)\n"
+            f"`топ дня` — топ монет за сегодня (победитель +1000 монет)\n"
+            f"`баланс` — проверить баланс\n\n"
+            f"**🎭 РЕПУТАЦИЯ:**\n"
+            f"`+реп` — ответь на сообщение, повысить репутацию\n"
+            f"`-реп` — ответь на сообщение, понизить репутацию\n"
+            f"`топ реп` — топ репутации\n"
+            f"`моя реп` — твоя репутация\n\n"
+            f"**💍 БРАКИ:**\n"
+            f"`брак @user` или ответь на сообщение → `брак`\n"
+            f"`развестись` — развестись\n"
+            f"`брак` — показать все браки в чате\n"
+            f"`мой брак` — показать твой брак\n\n"
+            f"**🏰 КЛАНЫ:**\n"
+            f"`создать клан [название]` — создать клан (10 уровень)\n"
+            f"`в клан` — ответь на сообщение владельца, вступить в клан\n"
+            f"`выйти из клана` — выйти из клана\n"
+            f"`удалить клан` — удалить клан (только владелец)\n"
+            f"`редактировать клан [новое название]` — изменить название (10 уровень)\n"
+            f"`кик из клана` — ответь на сообщение, кикнуть из клана (только владелец)\n"
+            f"`кланы` — показать все кланы в чате\n"
+            f"`мой клан` — показать твой клан\n\n"
+            f"**🌤 ПОГОДА:**\n"
+            f"`погода [город]` — погода в городе\n\n"
+            f"**📊 СТАТИСТИКА:**\n"
+            f"`список варнов` — все заварненные\n"
+            f"`список мутов` — все замученные\n"
+            f"`список банов` — все забаненные\n\n"
+            f"**🛡️ АНТИ-ФУНКЦИИ (10 уровень):**\n"
+            f"`+антимат` / `-антимат`\n"
+            f"`+антиссылки` / `-антиссылки`\n"
+            f"`+антиспам` / `-антиспам`\n"
+            f"`+капча` / `-капча`\n\n"
+            f"**🎮 Игры:**\n"
+            f"`рулетка` — русская рулетка (с кнопками)\n"
+            f"`кубы` — игра в кости\n"
+            f"`дуэль` — дуэль с прицелом\n"
+            f"`кнб` — камень/ножницы/бумага\n"
+            f"`монетка` — подбросить монетку\n\n"
+            f"**👑 Уровни (10 уровень):**\n"
+            f"`повысить [N]` или `повысить @user N`\n"
+            f"`понизить [N]` или `понизить @user N`\n"
+            f"`разжаловать` или `разжаловать @user`\n"
+            f"`повысить макс` или `повысить @user макс`\n\n"
+            f"**🔨 Модерация (10 уровень):**\n"
+            f"`мут [время]` или `мут @user [время]`\n"
+            f"`размут` или `размут @user`\n"
+            f"`бан [время]` или `бан @user [время]`\n"
+            f"`разбан` или `разбан @user`\n"
+            f"`кик [минуты]` или `кик @user [минуты]`\n"
+            f"`варн [причина]` или `варн @user [причина]`\n"
+            f"`снятьварн` или `снятьварн @user`\n\n"
+            f"**👑 Награды:**\n"
+            f"`наградить [название]` или `наградить @user [название]` (2+ уровень)\n"
+            f"`-награда [название]` или `-награда @user [название]` (10 уровень)\n\n"
+            f"**📊 Инфо:**\n"
+            f"`профиль`, `кто я`, `топ`, `стат`, `админы`, `моя роль`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # ===== БАЛАНС =====
+    if text_lower == "баланс":
+        coins = await get_coins(message.from_user.id, message.chat.id)
+        await message.reply(f"💰 У тебя **{coins}** монет!", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== ЕЖЕДНЕВНЫЙ БОНУС =====
+    if text_lower == "бонус" or text_lower == "ежедневно":
+        user_id = message.from_user.id
+        
+        if user_id in daily_cooldown:
+            last_claim = daily_cooldown[user_id]
+            if datetime.now() - last_claim < timedelta(days=1):
+                time_left = timedelta(days=1) - (datetime.now() - last_claim)
+                hours = int(time_left.total_seconds() // 3600)
+                minutes = int((time_left.total_seconds() % 3600) // 60)
+                await message.reply(f"⏳ Ты уже получил бонус! Следующий через {hours}ч {minutes}мин.")
+                return
+        
+        await add_coins(user_id, message.chat.id, 100)
+        daily_cooldown[user_id] = datetime.now()
+        await message.reply(f"🎁 Ты получил ежедневный бонус: **100 монет**!", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== РАБОТА =====
+    if text_lower == "работа":
+        user_id = message.from_user.id
+        
+        if user_id in work_cooldown:
+            last_work = work_cooldown[user_id]
+            if datetime.now() - last_work < timedelta(minutes=5):
+                await message.reply("⏳ Ты уже работал! Отдохни 5 минут.")
+                return
+        
+        works = [
+            "поработал шахтёром", "поработал строителем",
+            "поработал фермером", "поработал программистом",
+            "поработал учителем", "поработал доктором",
+            "поработал водителем", "поработал поваром",
+            "поработал юристом", "поработал инженером",
+            "поработал дизайнером", "поработал музыкантом"
+        ]
+        work = random.choice(works)
+        salary = random.randint(10, 30)
+        
+        await add_coins(user_id, message.chat.id, salary)
+        await add_daily_coins(user_id, message.chat.id, salary)
+        work_cooldown[user_id] = datetime.now()
+        await message.reply(f"💼 Ты {work} и заработал **{salary} монет**!", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== КАЗИНО =====
+    if text_lower.startswith("казино"):
+        args = text.split()
+        if len(args) < 2:
+            await message.reply("ℹ️ Использование: `казино [ставка]`\nПример: `казино 100`")
+            return
+        
+        try:
+            bet = int(args[1])
+            if bet < 1:
+                await message.reply("❌ Ставка должна быть больше 0!")
+                return
+        except:
+            await message.reply("❌ Введи число!")
+            return
+        
+        user_id = message.from_user.id
+        user_coins = await get_coins(user_id, message.chat.id)
+        
+        if user_coins < bet:
+            await message.reply(f"❌ У тебя только {user_coins} монет! Не хватает для ставки {bet}.")
+            return
+        
+        user_guess = random.randint(1, 6)
+        bot_roll = random.randint(1, 6)
+        
+        if user_guess == bot_roll:
+            win = bet * 2
+            await add_coins(user_id, message.chat.id, win)
+            await add_daily_coins(user_id, message.chat.id, win)
+            await message.reply(
+                f"🎰 **Казино!**\n\n"
+                f"🎲 Ты загадал: **{user_guess}**\n"
+                f"🎲 Выпало: **{bot_roll}**\n\n"
+                f"🎉 Ты угадал! +{win} монет! (x2)",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await remove_coins(user_id, message.chat.id, bet)
+            await message.reply(
+                f"🎰 **Казино!**\n\n"
+                f"🎲 Ты загадал: **{user_guess}**\n"
+                f"🎲 Выпало: **{bot_roll}**\n\n"
+                f"😭 Ты не угадал! -{bet} монет.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+    
+    # ===== СТАВКА (ЧЁТ/НЕЧЕТ) =====
+    if text_lower.startswith("ставка"):
+        args = text.split()
+        if len(args) < 3:
+            await message.reply("ℹ️ Использование: `ставка [сумма] [чет/нечет]`\nПример: `ставка 100 чет`")
+            return
+        
+        try:
+            bet = int(args[1])
+            if bet < 1:
+                await message.reply("❌ Ставка должна быть больше 0!")
+                return
+        except:
+            await message.reply("❌ Введи число!")
+            return
+        
+        choice = args[2].lower()
+        if choice not in ["чет", "нечет"]:
+            await message.reply("❌ Выбери: `чет` или `нечет`")
+            return
+        
+        user_id = message.from_user.id
+        user_coins = await get_coins(user_id, message.chat.id)
+        
+        if user_coins < bet:
+            await message.reply(f"❌ У тебя только {user_coins} монет! Не хватает для ставки {bet}.")
+            return
+        
+        roll = random.randint(1, 6)
+        is_even = roll % 2 == 0
+        
+        if (choice == "чет" and is_even) or (choice == "нечет" and not is_even):
+            win = int(bet * 1.5)
+            await add_coins(user_id, message.chat.id, win)
+            await add_daily_coins(user_id, message.chat.id, win)
+            await message.reply(
+                f"🎲 **Ставка!**\n\n"
+                f"🎲 Выпало: **{roll}** ({'чет' if is_even else 'нечет'})\n"
+                f"🎯 Ты выбрал: **{choice}**\n\n"
+                f"🎉 Ты выиграл! +{win} монет! (x1.5)",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            lose = int(bet * 0.1)
+            await remove_coins(user_id, message.chat.id, lose)
+            await message.reply(
+                f"🎲 **Ставка!**\n\n"
+                f"🎲 Выпало: **{roll}** ({'чет' if is_even else 'нечет'})\n"
+                f"🎯 Ты выбрал: **{choice}**\n\n"
+                f"😭 Ты проиграл! -{lose} монет (x0.1)",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+    
+    # ===== СЛОТЫ =====
+    if text_lower.startswith("слоты"):
+        args = text.split()
+        if len(args) < 2:
+            await message.reply("ℹ️ Использование: `слоты [ставка]`\nПример: `слоты 100`")
+            return
+        
+        try:
+            bet = int(args[1])
+            if bet < 1:
+                await message.reply("❌ Ставка должна быть больше 0!")
+                return
+        except:
+            await message.reply("❌ Введи число!")
+            return
+        
+        user_id = message.from_user.id
+        user_coins = await get_coins(user_id, message.chat.id)
+        
+        if user_coins < bet:
+            await message.reply(f"❌ У тебя только {user_coins} монет! Не хватает для ставки {bet}.")
+            return
+        
+        symbols = ["🍒", "🍋", "🍊", "🍇", "💎", "7️⃣"]
+        slots = [random.choice(symbols) for _ in range(3)]
+        
+        # ===== КОЭФФИЦИЕНТЫ =====
+        # 🍒🍒🍒 → x0.5
+        # 🍋🍋🍋 → x1
+        # 🍊🍊🍊 → x1.5
+        # 🍇🍇🍇 → x2
+        # 💎💎💎 → x5
+        # 7️⃣7️⃣7️⃣ → x10
+        # Два одинаковых → x0.1
+        # Разные → x0 (проигрыш)
+        
+        if slots[0] == slots[1] == slots[2]:
+            if slots[0] == "7️⃣":
+                win = bet * 10
+                result = f"🎰 **ДЖЕКПОТ!** {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x10)"
+            elif slots[0] == "💎":
+                win = bet * 5
+                result = f"🎰 **СУПЕР!** {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x5)"
+            elif slots[0] == "🍇":
+                win = bet * 2
+                result = f"🎰 {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x2)"
+            elif slots[0] == "🍊":
+                win = int(bet * 1.5)
+                result = f"🎰 {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x1.5)"
+            elif slots[0] == "🍋":
+                win = bet
+                result = f"🎰 {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x1)"
+            else:  # 🍒
+                win = int(bet * 0.5)
+                result = f"🎰 {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x0.5)"
+        elif slots[0] == slots[1] or slots[1] == slots[2] or slots[0] == slots[2]:
+            win = int(bet * 0.1)
+            result = f"🎰 {slots[0]} {slots[1]} {slots[2]}\n💰 +{win} монет! (x0.1)"
+        else:
+            win = 0
+            result = f"🎰 {slots[0]} {slots[1]} {slots[2]}\n😭 Ты проиграл **{bet}** монет! (x0)"
+        
+        if win > 0:
+            await add_coins(user_id, message.chat.id, win)
+            await add_daily_coins(user_id, message.chat.id, win)
+        else:
+            await remove_coins(user_id, message.chat.id, bet)
+        
+        await message.reply(result, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== ОГРАБИТЬ БАНК =====
+    if text_lower == "ограбить банк":
+        user_id = message.from_user.id
+        user_name = message.from_user.first_name
+        
+        if user_id in bank_rob_cooldown:
+            last_rob = bank_rob_cooldown[user_id]
+            if datetime.now() - last_rob < timedelta(hours=6):
+                time_left = timedelta(hours=6) - (datetime.now() - last_rob)
+                hours = int(time_left.total_seconds() // 3600)
+                minutes = int((time_left.total_seconds() % 3600) // 60)
+                await message.reply(f"⏳ Ты уже грабил банк! Следующее ограбление через {hours}ч {minutes}мин.")
+                return
+        
+        success = random.random() < 0.4
+        
+        if success:
+            stolen = random.randint(1000, 1000000000000)
+            await add_coins(user_id, message.chat.id, stolen)
+            await add_daily_coins(user_id, message.chat.id, stolen)
+            bank_rob_cooldown[user_id] = datetime.now()
+            await message.reply(
+                f"🏦 **{user_name}** ограбил банк и украл **{stolen}** монет! 🤑",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            penalty = random.randint(500, 2000)
+            await remove_coins(user_id, message.chat.id, penalty)
+            bank_rob_cooldown[user_id] = datetime.now()
+            await message.reply(
+                f"🚨 **{user_name}** попытался ограбить банк, но его поймали! Штраф: **{penalty}** монет!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+    
+    # ===== ОГРАБИТЬ ЧЕЛОВЕКА =====
+    if text_lower.startswith("ограбить человека"):
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение человека и напиши `ограбить человека`")
+            return
+        
+        user_id = message.from_user.id
+        target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        user_name = message.from_user.first_name
+        
+        if target_id == user_id:
+            await message.reply("❌ Нельзя ограбить самого себя!")
+            return
+        
+        if user_id in rob_person_cooldown:
+            last_rob = rob_person_cooldown[user_id]
+            if datetime.now() - last_rob < timedelta(hours=12):
+                time_left = timedelta(hours=12) - (datetime.now() - last_rob)
+                hours = int(time_left.total_seconds() // 3600)
+                minutes = int((time_left.total_seconds() % 3600) // 60)
+                await message.reply(f"⏳ Ты уже грабил! Следующее ограбление через {hours}ч {minutes}мин.")
+                return
+        
+        target_coins = await get_coins(target_id, message.chat.id)
+        if target_coins < 1:
+            await message.reply(f"❌ У {target_name} нет монет для ограбления!")
+            return
+        
+        success = random.random() < 0.5
+        
+        if success:
+            stolen = random.randint(1, target_coins)
+            await remove_coins(target_id, message.chat.id, stolen)
+            await add_coins(user_id, message.chat.id, stolen)
+            await add_daily_coins(user_id, message.chat.id, stolen)
+            rob_person_cooldown[user_id] = datetime.now()
+            await message.reply(
+                f"💰 **{user_name}** ограбил **{target_name}** и украл **{stolen}** монет!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            penalty = random.randint(10, 100)
+            await remove_coins(user_id, message.chat.id, penalty)
+            rob_person_cooldown[user_id] = datetime.now()
+            await message.reply(
+                f"🚨 **{user_name}** попытался ограбить **{target_name}**, но его поймали! Штраф: **{penalty}** монет!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+    
+    # ===== ТОП ДНЯ =====
+    if text_lower == "топ дня":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, daily_coins FROM messages WHERE chat_id = ? AND daily_coins > 0 ORDER BY daily_coins DESC LIMIT 5", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        if not rows:
+            await message.reply("📭 Сегодня никто не зарабатывал монеты!")
+            return
+        
+        text_list = f"🏆 **Топ монет за сегодня:**\n\n"
+        for i, (uid, coins) in enumerate(rows, 1):
+            try:
+                member = await bot.get_chat_member(message.chat.id, uid)
+                name = f"@{member.user.username}" if member.user.username else member.user.full_name
+                text_list += f"{i}. {name} — **{coins}** монет\n"
+            except:
+                pass
+        
+        if rows and rows[0][1] > 0:
+            winner_id = rows[0][0]
+            await add_coins(winner_id, message.chat.id, 1000)
+            text_list += f"\n🎉 Победитель получает **1000 монет**!"
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== РУССКАЯ РУЛЕТКА =====
+    if text_lower == "рулетка" or text_lower.startswith("рулетка "):
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение противника и напиши `рулетка`")
+            return
+        
+        challenger_id = message.from_user.id
+        opponent_id = message.reply_to_message.from_user.id
+        
+        if challenger_id == opponent_id:
+            await message.reply("❌ Нельзя играть с самим собой!")
+            return
+        
+        if challenger_id in roulette_games or opponent_id in roulette_games:
+            await message.reply("⚠️ Один из игроков уже играет в рулетку!")
+            return
+        
+        bullets = [0, 0, 0, 0, 0, 1]
+        random.shuffle(bullets)
+        
+        roulette_games[challenger_id] = {
+            "opponent": opponent_id,
+            "turn": challenger_id,
+            "bullets": bullets,
+            "chat_id": message.chat.id
+        }
+        roulette_games[opponent_id] = {
+            "opponent": challenger_id,
+            "turn": challenger_id,
+            "bullets": bullets,
+            "chat_id": message.chat.id
+        }
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ СОГЛАСИТЬСЯ", callback_data=f"roulette_accept_{message.chat.id}_{challenger_id}_{opponent_id}"),
+                InlineKeyboardButton(text="❌ ОТКАЗАТЬСЯ", callback_data=f"roulette_decline_{message.chat.id}_{challenger_id}_{opponent_id}")
+            ]
+        ])
+        
+        await message.reply(
+            f"🔫 **{await get_name(challenger_id)}** вызывает **{await get_name(opponent_id)}** на **Русскую рулетку**!\n\n"
+            f"💀 В барабане 6 патронов, 1 боевой!\n"
+            f"💥 Игра идёт до первого попадания!\n\n"
+            f"👇 **{await get_name(opponent_id)}**, согласись на игру:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+        return
+    
+    # ===== РЕПУТАЦИЯ =====
+    if text_lower == "+реп" or text_lower == "-реп":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение человека и напиши `+реп` или `-реп`")
+            return
+        
+        target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        user_id = message.from_user.id
+        
+        if target_id == user_id:
+            await message.reply("❌ Нельзя менять репутацию самого себя!")
+            return
+        
+        if user_id in rep_cooldown:
+            last_rep = rep_cooldown[user_id]
+            if datetime.now() - last_rep < timedelta(minutes=5):
+                await message.reply("⏳ Подожди 5 минут между изменениями репутации!")
+                return
+        
+        amount = 1 if text_lower == "+реп" else -1
+        await add_rep(target_id, message.chat.id, amount)
+        rep_cooldown[user_id] = datetime.now()
+        
+        current_rep = await get_rep(target_id, message.chat.id)
+        action = "повысил" if amount == 1 else "понизил"
+        emoji = "👍" if amount == 1 else "👎"
+        
+        await message.reply(f"{emoji} Ты {action} репутацию **{target_name}**! (Теперь: {current_rep})", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== ТОП РЕПУТАЦИИ =====
+    if text_lower == "топ реп":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, rep FROM reputation WHERE chat_id = ? ORDER BY rep DESC LIMIT 5", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        if not rows:
+            await message.reply("📭 Репутация пока не начислялась!")
+            return
+        
+        text_list = f"🏆 **Топ репутации:**\n\n"
+        for i, (uid, rep) in enumerate(rows, 1):
+            try:
+                member = await bot.get_chat_member(message.chat.id, uid)
+                name = f"@{member.user.username}" if member.user.username else member.user.full_name
+                text_list += f"{i}. {name} — **{rep}** реп\n"
+            except:
+                pass
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== МОЯ РЕПУТАЦИЯ =====
+    if text_lower == "моя реп":
+        rep = await get_rep(message.from_user.id, message.chat.id)
+        await message.reply(f"⭐ Твоя репутация: **{rep}**", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== БРАК =====
+    if text_lower == "брак":
+        if message.reply_to_message:
+            target_id = message.reply_to_message.from_user.id
+            target_name = await get_name(target_id)
+            user_id = message.from_user.id
+            
+            if target_id == user_id:
+                await message.reply("❌ Нельзя жениться на самом себе!")
+                return
+            
+            if await get_marriage(user_id, message.chat.id):
+                await message.reply("❌ Ты уже в браке! Сначала разведись.")
+                return
+            
+            if await get_marriage(target_id, message.chat.id):
+                await message.reply(f"❌ {target_name} уже в браке!")
+                return
+            
+            marriage_proposals[(message.chat.id, target_id)] = user_id
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="💍 СОГЛАСИТЬСЯ", callback_data=f"marry_accept_{message.chat.id}_{target_id}_{user_id}"),
+                    InlineKeyboardButton(text="❌ ОТКАЗАТЬСЯ", callback_data=f"marry_decline_{message.chat.id}_{target_id}_{user_id}")
+                ]
+            ])
+            
+            await message.reply(
+                f"💍 **{await get_name(user_id)}** предлагает брак **{target_name}**!\n\n"
+                f"👇 **{target_name}**, согласись на брак:",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=keyboard
+            )
+        else:
+            marriages = await get_all_marriages(message.chat.id)
+            if not marriages:
+                await message.reply("💔 В этом чате нет браков!")
+                return
+            
+            text_list = f"💍 **Браки в чате:**\n\n"
+            for user_id, spouse_id in marriages:
+                user_name = await get_name(user_id)
+                spouse_name = await get_name(spouse_id)
+                text_list += f"💑 {user_name} + {spouse_name}\n"
+            
+            await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== РАЗВЕСТИСЬ =====
+    if text_lower == "развестись":
+        spouse_id = await get_marriage(message.from_user.id, message.chat.id)
+        if not spouse_id:
+            await message.reply("❌ Ты не в браке!")
+            return
+        
+        await remove_marriage(message.from_user.id, message.chat.id)
+        await remove_marriage(spouse_id, message.chat.id)
+        
+        spouse_name = await get_name(spouse_id)
+        await message.reply(f"💔 **{await get_name(message.from_user.id)}** и **{spouse_name}** развелись!")
+        return
+    
+    # ===== МОЙ БРАК =====
+    if text_lower == "мой брак":
+        spouse_id = await get_marriage(message.from_user.id, message.chat.id)
+        if not spouse_id:
+            await message.reply("❌ Ты не в браке!")
+            return
+        
+        spouse_name = await get_name(spouse_id)
+        await message.reply(f"💑 Твой супруг: **{spouse_name}**", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== КЛАНЫ =====
+    # СОЗДАТЬ КЛАН
+    if text_lower.startswith("создать клан"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        
+        args = text.split(maxsplit=2)
+        if len(args) < 3:
+            await message.reply("ℹ️ Использование: `создать клан [название]`")
+            return
+        
+        clan_name = args[2]
+        
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id FROM clans WHERE chat_id = ? AND name = ?", (message.chat.id, clan_name))
+        if c.fetchone():
+            conn.close()
+            await message.reply(f"❌ Клан с названием **{clan_name}** уже существует!")
+            return
+        
+        c.execute("SELECT id FROM clans WHERE chat_id = ? AND owner_id = ?", (message.chat.id, message.from_user.id))
+        if c.fetchone():
+            conn.close()
+            await message.reply("❌ Ты уже создал клан! Нельзя создать больше одного.")
+            return
+        
+        c.execute("INSERT INTO clans (chat_id, name, owner_id, members) VALUES (?,?,?,?)", 
+                  (message.chat.id, clan_name, message.from_user.id, str(message.from_user.id)))
+        conn.commit()
+        conn.close()
+        
+        await message.reply(f"✅ Клан **{clan_name}** создан! Ты его владелец.")
+        return
+    
+    # ВСТУПИТЬ В КЛАН
+    if text_lower == "в клан":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение владельца клана и напиши `в клан`")
+            return
+        
+        owner_id = message.reply_to_message.from_user.id
+        
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id, name, owner_id, members FROM clans WHERE chat_id = ? AND owner_id = ?", (message.chat.id, owner_id))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await message.reply("❌ У этого пользователя нет клана!")
+            return
+        
+        clan_id, clan_name, owner_id, members_str = row
+        members = members_str.split(",") if members_str else []
+        
+        if str(message.from_user.id) in members:
+            conn.close()
+            await message.reply(f"❌ Ты уже в клане **{clan_name}**!")
+            return
+        
+        members.append(str(message.from_user.id))
+        c.execute("UPDATE clans SET members = ? WHERE id = ?", (",".join(members), clan_id))
+        conn.commit()
+        conn.close()
+        
+        await message.reply(f"✅ Ты вступил в клан **{clan_name}**!")
+        return
+    
+    # ВЫЙТИ ИЗ КЛАНА
+    if text_lower == "выйти из клана":
+        clan_info = await get_user_clan(message.from_user.id, message.chat.id)
+        if not clan_info:
+            await message.reply("❌ Ты не состоишь ни в одном клане!")
+            return
+        
+        clan_id, clan_name, owner_id, members_str = clan_info
+        members = members_str.split(",") if members_str else []
+        
+        if owner_id == message.from_user.id:
+            await message.reply("❌ Ты владелец клана! Сначала удали клан или передай владение.")
+            return
+        
+        members.remove(str(message.from_user.id))
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("UPDATE clans SET members = ? WHERE id = ?", (",".join(members), clan_id))
+        conn.commit()
+        conn.close()
+        
+        await message.reply(f"✅ Ты вышел из клана **{clan_name}**!")
+        return
+    
+    # УДАЛИТЬ КЛАН
+    if text_lower == "удалить клан":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id, name FROM clans WHERE chat_id = ? AND owner_id = ?", (message.chat.id, message.from_user.id))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await message.reply("❌ Ты не являешься владельцем клана!")
+            return
+        
+        clan_id, clan_name = row
+        c.execute("DELETE FROM clans WHERE id = ?", (clan_id,))
+        conn.commit()
+        conn.close()
+        
+        await message.reply(f"✅ Клан **{clan_name}** удалён!")
+        return
+    
+    # РЕДАКТИРОВАТЬ КЛАН
+    if text_lower.startswith("редактировать клан"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        
+        args = text.split(maxsplit=3)
+        if len(args) < 4:
+            await message.reply("ℹ️ Использование: `редактировать клан [новое название]`")
+            return
+        
+        new_name = args[3]
+        
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id FROM clans WHERE chat_id = ? AND owner_id = ?", (message.chat.id, message.from_user.id))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await message.reply("❌ Ты не являешься владельцем клана!")
+            return
+        
+        c.execute("UPDATE clans SET name = ? WHERE id = ?", (new_name, row[0]))
+        conn.commit()
+        conn.close()
+        
+        await message.reply(f"✅ Название клана изменено на **{new_name}**!")
+        return
+    
+    # КИК ИЗ КЛАНА
+    if text_lower == "кик из клана":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение человека и напиши `кик из клана`")
+            return
+        
+        target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id, name, owner_id, members FROM clans WHERE chat_id = ? AND owner_id = ?", (message.chat.id, message.from_user.id))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await message.reply("❌ Ты не являешься владельцем клана!")
+            return
+        
+        clan_id, clan_name, owner_id, members_str = row
+        members = members_str.split(",") if members_str else []
+        
+        if str(target_id) not in members:
+            conn.close()
+            await message.reply(f"❌ {target_name} не в твоём клане!")
+            return
+        
+        members.remove(str(target_id))
+        c.execute("UPDATE clans SET members = ? WHERE id = ?", (",".join(members), clan_id))
+        conn.commit()
+        conn.close()
+        
+        await message.reply(f"👢 {target_name} кикнут из клана **{clan_name}**!")
+        return
+    
+    # ПОКАЗАТЬ ВСЕ КЛАНЫ
+    if text_lower == "кланы":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT name, owner_id, members FROM clans WHERE chat_id = ?", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        if not rows:
+            await message.reply("📭 В этом чате нет кланов!")
+            return
+        
+        text_list = f"🏰 **Кланы в чате:**\n\n"
+        for name, owner_id, members_str in rows:
+            members = members_str.split(",") if members_str else []
+            owner_name = await get_name(owner_id)
+            text_list += f"👑 **{name}**\n"
+            text_list += f"👤 Владелец: {owner_name}\n"
+            text_list += f"👥 Участников: {len(members)}\n"
+            if len(members) <= 5:
+                names = [await get_name(int(m)) for m in members if m.isdigit()]
+                text_list += f"📋 Участники: {', '.join(names)}\n"
+            text_list += "\n"
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # МОЙ КЛАН
+    if text_lower == "мой клан":
+        clan_info = await get_user_clan(message.from_user.id, message.chat.id)
+        if not clan_info:
+            await message.reply("❌ Ты не состоишь ни в одном клане!")
+            return
+        
+        clan_id, name, owner_id, members_str = clan_info
+        members = members_str.split(",") if members_str else []
+        owner_name = await get_name(owner_id)
+        
+        text_list = f"🏰 **Твой клан: {name}**\n"
+        text_list += f"👤 Владелец: {owner_name}\n"
+        text_list += f"👥 Участников: {len(members)}\n"
+        names = [await get_name(int(m)) for m in members if m.isdigit()]
+        text_list += f"📋 Участники: {', '.join(names)}"
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== ПОГОДА =====
+    if text_lower.startswith("погода"):
+        args = text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.reply("ℹ️ Использование: `погода [город]`\nПример: `погода Москва`")
+            return
+        
+        city = args[1]
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"http://wttr.in/{city}?format=%C+%t+%w"
+                async with session.get(url) as resp:
+                    data = await resp.text()
+                    await message.reply(f"🌤 **Погода в {city}:**\n{data}")
+        except:
+            await message.reply(f"❌ Не удалось получить погоду для {city}!")
+        return
+    
+    # ===== СПИСОК ВАРНОВ =====
+    if text_lower == "список варнов":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT user_id, COUNT(*) FROM warns WHERE chat_id = ? GROUP BY user_id", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        if not rows:
+            await message.reply("📭 Нет пользователей с варнами!")
+            return
+        
+        text_list = f"⚠️ **Заварненные пользователи:**\n\n"
+        for uid, count in rows:
+            name = await get_name(uid)
+            text_list += f"• {name} — {count} варнов\n"
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== СПИСОК МУТОВ =====
+    if text_lower == "список мутов":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT user_id FROM mutes_list WHERE chat_id = ?", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        if not rows:
+            await message.reply("📭 Нет замученных пользователей!")
+            return
+        
+        text_list = f"🔇 **Замученные пользователи:**\n\n"
+        for (uid,) in rows:
+            name = await get_name(uid)
+            text_list += f"• {name}\n"
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== СПИСОК БАНОВ =====
+    if text_lower == "список банов":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT user_id FROM bans_list WHERE chat_id = ?", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        
+        if not rows:
+            await message.reply("📭 Нет забаненных пользователей!")
+            return
+        
+        text_list = f"🚫 **Забаненные пользователи:**\n\n"
+        for (uid,) in rows:
+            name = await get_name(uid)
+            text_list += f"• {name}\n"
+        
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== АНТИ-МАТ =====
+    if text_lower == "+антимат":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "anti_mat", 1)
+        await message.reply("✅ Анти-мат включён!")
+        return
+    
+    if text_lower == "-антимат":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "anti_mat", 0)
+        await message.reply("✅ Анти-мат выключен!")
+        return
+    
+    # ===== АНТИ-ССЫЛКИ =====
+    if text_lower == "+антиссылки":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "anti_links", 1)
+        await message.reply("✅ Анти-ссылки включены!")
+        return
+    
+    if text_lower == "-антиссылки":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "anti_links", 0)
+        await message.reply("✅ Анти-ссылки выключены!")
+        return
+    
+    # ===== АНТИ-СПАМ =====
+    if text_lower == "+антиспам":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "anti_spam", 1)
+        await message.reply("✅ Анти-спам включён!")
+        return
+    
+    if text_lower == "-антиспам":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "anti_spam", 0)
+        await message.reply("✅ Анти-спам выключен!")
+        return
+    
+    # ===== КАПЧА =====
+    if text_lower == "+капча":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "captcha", 1)
+        await message.reply("✅ Капча включена!")
+        return
+    
+    if text_lower == "-капча":
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        await set_chat_setting(message.chat.id, "captcha", 0)
+        await message.reply("✅ Капча выключена!")
+        return
+    
+    # ===== ПОВЫСИТЬ =====
+    if text_lower.startswith("повысить"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split()
+        current_level = await get_role(target_id, message.chat.id)
+        if len(args) > 1 and args[1] == "макс" or (len(args) > 2 and args[2] == "макс"):
+            new_level = 10
+            if new_level == current_level:
+                await message.reply(f"⚠️ У {target_name} уже макс уровень")
+                return
+            await set_role(target_id, message.chat.id, new_level)
+            await message.reply(f"✅ {target_name} повышен до МАКСИМАЛЬНОГО уровня! ({current_level} → 10)")
+            return
+        try:
+            num = None
+            for arg in args[1:]:
+                if arg.isdigit():
+                    num = int(arg)
+                    break
+            up = num if num else 1
+            if up < 1 or up > 10:
+                await message.reply("⚠️ Можно повысить на число от 1 до 10 или `макс`")
+                return
+            new_level = min(current_level + up, 10)
+            if new_level == current_level:
+                await message.reply(f"⚠️ У {target_name} уже макс уровень")
+                return
+            await set_role(target_id, message.chat.id, new_level)
+            await message.reply(f"✅ {target_name} повышен на {up} уровень! ({current_level} → {new_level})")
+        except ValueError:
+            await message.reply("⚠️ Укажи число от 1 до 10")
+        return
+    
+    # ===== ПОНИЗИТЬ =====
+    if text_lower.startswith("понизить"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split()
+        current_level = await get_role(target_id, message.chat.id)
+        try:
+            num = None
+            for arg in args[1:]:
+                if arg.isdigit():
+                    num = int(arg)
+                    break
+            down = num if num else 1
+            if down < 1 or down > 10:
+                await message.reply("⚠️ Можно понизить на число от 1 до 10")
+                return
+            new_level = max(current_level - down, 1)
+            if new_level == current_level:
+                await message.reply(f"⚠️ У {target_name} уже мин уровень")
+                return
+            await set_role(target_id, message.chat.id, new_level)
+            await message.reply(f"✅ {target_name} понижен на {down} уровень! ({current_level} → {new_level})")
+        except ValueError:
+            await message.reply("⚠️ Укажи число от 1 до 10")
+        return
+    
+    # ===== РАЗЖАЛОВАТЬ =====
+    if text_lower.startswith("разжаловать"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        current_level = await get_role(target_id, message.chat.id)
+        if current_level == 1:
+            await message.reply(f"⚠️ У {target_name} уже мин уровень")
+            return
+        await set_role(target_id, message.chat.id, 1)
+        await message.reply(f"✅ {target_name} разжалован до 1 уровня! ({current_level} → 1)")
+        return
+    
+    # ===== МУТ =====
+    if text_lower.startswith("мут"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split()
+        duration = 86400
+        for arg in args[1:]:
+            if re.match(r'^\d+[mhd]$', arg):
+                duration = parse_time(arg)
+                break
+        try:
+            await bot.restrict_chat_member(
+                message.chat.id, target_id,
+                ChatPermissions(can_send_messages=False),
+                until_date=datetime.now() + timedelta(seconds=duration)
+            )
+            
+            conn = sqlite3.connect("fable_bot.db")
+            c = conn.cursor()
+            c.execute("INSERT INTO mutes_list (user_id, chat_id, muted_by, reason, date, until_date) VALUES (?,?,?,?,?,?)",
+                      (target_id, message.chat.id, message.from_user.id, "Мут", datetime.now().isoformat(), (datetime.now() + timedelta(seconds=duration)).isoformat()))
+            conn.commit()
+            conn.close()
+            
+            await message.reply(f"🔇 {target_name} замьючен на {duration//60} мин.")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== РАЗМУТ =====
+    if text_lower.startswith("размут"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        try:
+            await bot.restrict_chat_member(
+                message.chat.id, target_id,
+                ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True
+                )
+            )
+            
+            conn = sqlite3.connect("fable_bot.db")
+            c = conn.cursor()
+            c.execute("DELETE FROM mutes_list WHERE user_id = ? AND chat_id = ?", (target_id, message.chat.id))
+            conn.commit()
+            conn.close()
+            
+            await message.reply(f"🔊 {target_name} размьючен.")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== БАН =====
+    if text_lower.startswith("бан"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split()
+        duration = None
+        for arg in args[1:]:
+            if re.match(r'^\d+[mhd]$', arg):
+                duration = parse_time(arg)
+                break
+        try:
+            if duration:
+                await bot.ban_chat_member(message.chat.id, target_id)
+                await asyncio.sleep(duration)
+                await bot.unban_chat_member(message.chat.id, target_id)
+                await message.reply(f"🚫 {target_name} забанен на {duration//60} мин.")
+            else:
+                await bot.ban_chat_member(message.chat.id, target_id)
+                await message.reply(f"🚫 {target_name} забанен навсегда.")
+            
+            conn = sqlite3.connect("fable_bot.db")
+            c = conn.cursor()
+            c.execute("INSERT INTO bans_list (user_id, chat_id, banned_by, reason, date) VALUES (?,?,?,?,?)",
+                      (target_id, message.chat.id, message.from_user.id, "Бан", datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== РАЗБАН =====
+    if text_lower.startswith("разбан"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        try:
+            await bot.unban_chat_member(message.chat.id, target_id)
+            
+            conn = sqlite3.connect("fable_bot.db")
+            c = conn.cursor()
+            c.execute("DELETE FROM bans_list WHERE user_id = ? AND chat_id = ?", (target_id, message.chat.id))
+            conn.commit()
+            conn.close()
+            
+            await message.reply(f"✅ {target_name} разбанен.")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== КИК =====
+    if text_lower.startswith("кик"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split()
+        delay = 0
+        for arg in args[1:]:
+            if arg.isdigit():
+                delay = int(arg)
+                break
+        try:
+            if delay > 0:
+                await message.reply(f"⏳ {target_name} будет кикнут через {delay} мин.")
+                await asyncio.sleep(delay * 60)
+            await bot.ban_chat_member(message.chat.id, target_id)
+            await bot.unban_chat_member(message.chat.id, target_id)
+            await message.reply(f"👢 {target_name} кикнут.")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== ВАРН =====
+    if text_lower.startswith("варн"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split(maxsplit=2)
+        reason = "Без причины"
+        duration = None
+        if len(args) > 1:
+            if re.match(r'^\d+[mhd]$', args[1]):
+                duration = parse_time(args[1])
+                if len(args) > 2:
+                    reason = args[2]
+            else:
+                reason = args[1]
+                if len(args) > 2 and re.match(r'^\d+[mhd]$', args[2]):
+                    duration = parse_time(args[2])
+        try:
+            result = await add_warn(target_id, message.chat.id, reason, message.from_user.id, duration)
+            await message.reply(f"{result} ({target_name})")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== СНЯТЬВАРН =====
+    if text_lower.startswith("снятьварн"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        try:
+            if await remove_warn(target_id, message.chat.id):
+                await message.reply(f"✅ Снят последний варн у {target_name}.")
+            else:
+                await message.reply(f"✅ У {target_name} нет варнов.")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== НАГРАДИТЬ =====
+    if text_lower.startswith("наградить"):
+        if await get_role(message.from_user.id, message.chat.id) < 2:
+            await message.reply("❌ Недостаточно прав! (нужен 2+ уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split(maxsplit=2)
+        if len(args) < 2:
+            await message.reply("ℹ️ Укажи название награды")
+            return
+        award_name = args[1]
+        if award_name.startswith("@"):
+            award_name = args[2] if len(args) > 2 else "Награда"
+        try:
+            await add_award(target_id, message.chat.id, award_name, message.from_user.id)
+            await message.reply(f"🏆 {target_name} награждён **{award_name}**!")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== -НАГРАДА =====
+    if text_lower.startswith("-награда"):
+        if await get_role(message.from_user.id, message.chat.id) < 10:
+            await message.reply("❌ Недостаточно прав! (нужен 10 уровень)")
+            return
+        target_id = await get_target_user(message)
+        if not target_id:
+            if not message.reply_to_message:
+                await message.reply("ℹ️ Ответь на сообщение или укажи @username")
+                return
+            target_id = message.reply_to_message.from_user.id
+        target_name = await get_name(target_id)
+        args = text.split(maxsplit=2)
+        if len(args) < 2:
+            await message.reply("ℹ️ Укажи название награды")
+            return
+        award_name = args[1]
+        if award_name.startswith("@"):
+            award_name = args[2] if len(args) > 2 else "Награда"
+        try:
+            if await remove_award(target_id, message.chat.id, award_name):
+                await message.reply(f"🗑️ Снята награда **{award_name}** у {target_name}.")
+            else:
+                await message.reply(f"❌ У {target_name} нет награды **{award_name}**.")
+        except:
+            await message.reply("❌ Ошибка!")
+        return
+    
+    # ===== КУБЫ =====
+    if text_lower == "кубы":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение противника и напиши `кубы`")
+            return
+        challenger_id = message.from_user.id
+        opponent_id = message.reply_to_message.from_user.id
+        if challenger_id == opponent_id:
+            await message.reply("❌ Нельзя играть с самим собой!")
+            return
+        if challenger_id in cube_games or opponent_id in cube_games:
+            await message.reply("⚠️ Один из игроков уже участвует в игре!")
+            return
+        cube_games[challenger_id] = {"opponent": opponent_id}
+        cube_games[opponent_id] = {"opponent": challenger_id}
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ СОГЛАСИТЬСЯ", callback_data=f"cube_accept_{message.chat.id}_{challenger_id}_{opponent_id}"),
+                InlineKeyboardButton(text="❌ ОТКАЗАТЬСЯ", callback_data=f"cube_decline_{message.chat.id}_{challenger_id}_{opponent_id}")
+            ]
+        ])
+        await message.reply(
+            f"🎲 **{await get_name(challenger_id)}** вызывает на кубы **{await get_name(opponent_id)}**!\n\n"
+            f"👇 **{await get_name(opponent_id)}**, согласись на игру:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+        return
+    
+    # ===== ДУЭЛЬ =====
+    if text_lower == "дуэль":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение противника и напиши `дуэль`")
+            return
+        challenger_id = message.from_user.id
+        opponent_id = message.reply_to_message.from_user.id
+        if challenger_id == opponent_id:
+            await message.reply("❌ Нельзя вызвать на дуэль самого себя!")
+            return
+        if (message.chat.id, challenger_id, opponent_id) in active_duels:
+            await message.reply("⚠️ Дуэль с этим участником уже идёт!")
+            return
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ СОГЛАСИТЬСЯ", callback_data=f"duel_accept_{message.chat.id}_{challenger_id}_{opponent_id}"),
+                InlineKeyboardButton(text="❌ ОТКАЗАТЬСЯ", callback_data=f"duel_decline_{message.chat.id}_{challenger_id}_{opponent_id}")
+            ]
+        ])
+        await message.reply(
+            f"🔫 **{await get_name(challenger_id)}** вызывает на дуэль **{await get_name(opponent_id)}**!\n\n"
+            f"👇 **{await get_name(opponent_id)}**, согласись на дуэль:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+        return
+    
+    # ===== КНБ =====
+    if text_lower == "кнб":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение противника и напиши `кнб`")
+            return
+        challenger_id = message.from_user.id
+        opponent_id = message.reply_to_message.from_user.id
+        if challenger_id == opponent_id:
+            await message.reply("❌ Нельзя играть с самим собой!")
+            return
+        if (message.chat.id, challenger_id, opponent_id) in active_knb:
+            await message.reply("⚠️ Игра с этим участником уже идёт!")
+            return
+        active_knb.add((message.chat.id, challenger_id, opponent_id))
+        knb_choices[(message.chat.id, challenger_id)] = None
+        knb_choices[(message.chat.id, opponent_id)] = None
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✊ КАМЕНЬ", callback_data=f"knb_{message.chat.id}_{challenger_id}_{opponent_id}_камень"),
+                InlineKeyboardButton(text="✌️ НОЖНИЦЫ", callback_data=f"knb_{message.chat.id}_{challenger_id}_{opponent_id}_ножницы"),
+                InlineKeyboardButton(text="✋ БУМАГА", callback_data=f"knb_{message.chat.id}_{challenger_id}_{opponent_id}_бумага")
+            ]
+        ])
+        await message.reply(f"✊✌️✋ **{await get_name(challenger_id)}** вызывает **{await get_name(opponent_id)}** на **Камень/Ножницы/Бумага**!\n\n"
+                           f"🎲 **{await get_name(challenger_id)}**, сделай свой выбор:",
+                           parse_mode=ParseMode.MARKDOWN,
+                           reply_markup=keyboard)
+        return
+    
+    # ===== МОНЕТКА =====
+    if text_lower == "монетка":
+        if not message.reply_to_message:
+            await message.reply("ℹ️ Ответь на сообщение противника и напиши `монетка`")
+            return
+        challenger_id = message.from_user.id
+        opponent_id = message.reply_to_message.from_user.id
+        if challenger_id == opponent_id:
+            await message.reply("❌ Нельзя играть с самим собой!")
+            return
+        if (message.chat.id, challenger_id, opponent_id) in active_coin:
+            await message.reply("⚠️ Игра с этим участником уже идёт!")
+            return
+        active_coin.add((message.chat.id, challenger_id, opponent_id))
+        coin_choices[(message.chat.id, challenger_id)] = None
+        coin_choices[(message.chat.id, opponent_id)] = None
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🪙 ОРЁЛ", callback_data=f"coin_{message.chat.id}_{challenger_id}_{opponent_id}_орёл"),
+                InlineKeyboardButton(text="🪙 РЕШКА", callback_data=f"coin_{message.chat.id}_{challenger_id}_{opponent_id}_решка")
+            ]
+        ])
+        await message.reply(f"🪙 **{await get_name(challenger_id)}** вызывает **{await get_name(opponent_id)}** на **Монетку**!\n\n"
+                           f"🎲 **{await get_name(challenger_id)}**, сделай свой выбор:",
+                           parse_mode=ParseMode.MARKDOWN,
+                           reply_markup=keyboard)
+        return
+    
+    # ===== ПРОФИЛЬ =====
+    if text_lower == "профиль" or text_lower == "кто я":
+        level = await get_role(message.from_user.id, message.chat.id)
+        msg_count = await get_user_message_count(message.chat.id, message.from_user.id)
+        coins = await get_coins(message.from_user.id, message.chat.id)
+        rep = await get_rep(message.from_user.id, message.chat.id)
+        join_date = await get_join_date(message.from_user.id, message.chat.id)
+        awards = await get_awards(message.from_user.id, message.chat.id)
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM warns WHERE user_id = ? AND chat_id = ?", (message.from_user.id, message.chat.id))
+        warn_count = c.fetchone()[0]
+        conn.close()
+        
+        text_list = f"📊 **Профиль @{message.from_user.username or message.from_user.first_name}**\n"
+        text_list += f"🎭 Уровень: {level}/10\n"
+        text_list += f"💬 Сообщений в чате: {msg_count}\n"
+        text_list += f"💰 Монет: {coins}\n"
+        text_list += f"⭐ Репутация: {rep}\n"
+        text_list += f"⚠️ Варнов: {warn_count}/5\n"
+        if join_date:
+            text_list += f"📅 В чате с: {join_date[:10]}\n"
+        if awards:
+            text_list += f"\n🏆 **Награды:**\n"
+            for award, given_by, date in awards:
+                giver = await get_name(given_by)
+                text_list += f"• {award} (от {giver}, {date[:10]})\n"
+        await message.reply(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== ТОП =====
+    if text_lower == "топ":
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, COUNT(*) as cnt FROM messages WHERE chat_id = ? GROUP BY user_id ORDER BY cnt DESC LIMIT 5", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        if not rows:
+            await message.reply("📭 Нет сообщений.")
+            return
+        text_list = f"🏆 **Топ активных в {BOT_NAME}:**\n"
+        for i, (uid, cnt) in enumerate(rows, 1):
+            try:
+                member = await bot.get_chat_member(message.chat.id, uid)
+                name = f"@{member.user.username}" if member.user.username else f"id{uid}"
+                text_list += f"{i}. {name} — {cnt} сообщений\n"
+            except:
+                pass
+        await message.answer(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== СТАТИСТИКА =====
+    if text_lower in ["стат", "статистика"]:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (message.chat.id,))
+        total = c.fetchone()[0]
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM messages WHERE chat_id = ?", (message.chat.id,))
+        users = c.fetchone()[0]
+        conn.close()
+        await message.reply(f"📊 **Статистика чата {BOT_NAME}:**\n💬 Сообщений: {total}\n👥 Участников писало: {users}", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== МОЯ РОЛЬ =====
+    if text_lower in ["моя роль", "мой уровень", "мояроль"]:
+        level = await get_role(message.from_user.id, message.chat.id)
+        await message.reply(f"🎭 Ваш РП-уровень в {BOT_NAME}: **{level}** из 10", parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # ===== АДМИНЫ =====
+    if text_lower in ["админы", "рп админы", "список админов"]:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, level FROM rp_roles WHERE chat_id = ? AND level >= 1 ORDER BY level DESC", (message.chat.id,))
+        rows = c.fetchall()
+        conn.close()
+        if not rows:
+            await message.answer("🎭 РП-админов пока нет.")
+            return
+        text_list = f"👑 **РП-админы {BOT_NAME}:**\n"
+        for uid, lvl in rows:
+            try:
+                member = await bot.get_chat_member(message.chat.id, uid)
+                name = f"@{member.user.username}" if member.user.username else member.user.full_name
+                text_list += f"⭐ Lv{lvl}: {name}\n"
+            except:
+                pass
+        await message.answer(text_list, parse_mode=ParseMode.MARKDOWN)
+        return
+
+# ========== КОЛБЭКИ ==========
+
+# ===== БРАК =====
+@dp.callback_query(lambda c: c.data.startswith("marry_accept_"))
+async def marry_accept(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, target_id, proposer_id = data
+    chat_id = int(chat_id)
+    target_id = int(target_id)
+    proposer_id = int(proposer_id)
+    
+    if callback.from_user.id != target_id:
+        await callback.answer("❌ Только вызванный игрок может согласиться!", show_alert=True)
+        return
+    
+    if await get_marriage(target_id, chat_id):
+        await callback.message.edit_text("❌ Ты уже в браке!")
+        return
+    
+    if await get_marriage(proposer_id, chat_id):
+        await callback.message.edit_text("❌ Этот пользователь уже в браке!")
+        return
+    
+    await set_marriage(target_id, chat_id, proposer_id)
+    await set_marriage(proposer_id, chat_id, target_id)
+    
+    await callback.message.edit_text(
+        f"💍 **{await get_name(proposer_id)}** и **{await get_name(target_id)}** поженились! 🎉\n\n"
+        f"❤️ Поздравляем молодожёнов!",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("marry_decline_"))
+async def marry_decline(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, target_id, proposer_id = data
+    chat_id = int(chat_id)
+    target_id = int(target_id)
+    proposer_id = int(proposer_id)
+    
+    if callback.from_user.id != target_id:
+        await callback.answer("❌ Только вызванный игрок может отказаться!", show_alert=True)
+        return
+    
+    await callback.message.edit_text(
+        f"❌ **{await get_name(target_id)}** отказался от брака с **{await get_name(proposer_id)}**!",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await callback.answer()
+
+# ===== РУССКАЯ РУЛЕТКА =====
+@dp.callback_query(lambda c: c.data.startswith("roulette_accept_"))
+async def roulette_accept(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, challenger_id, opponent_id = data
+    chat_id = int(chat_id)
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+    
+    if callback.from_user.id != opponent_id:
+        await callback.answer("❌ Только вызванный игрок может согласиться!", show_alert=True)
+        return
+    
+    await callback.message.delete()
+    
+    await bot.send_message(
+        chat_id,
+        f"🔫 **Русская рулетка началась!**\n\n"
+        f"👤 {await get_name(challenger_id)} против {await get_name(opponent_id)}\n"
+        f"💀 В барабане 6 патронов, 1 боевой!\n\n"
+        f"🔫 Первый выстрел делает {await get_name(challenger_id)}..."
+    )
+    
+    roulette_games[challenger_id]["chat_id"] = chat_id
+    roulette_games[opponent_id]["chat_id"] = chat_id
+    
+    await asyncio.sleep(1)
+    await roulette_shoot(chat_id, challenger_id, opponent_id)
+
+@dp.callback_query(lambda c: c.data.startswith("roulette_decline_"))
+async def roulette_decline(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, challenger_id, opponent_id = data
+    chat_id = int(chat_id)
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+    
+    if callback.from_user.id != opponent_id:
+        await callback.answer("❌ Только вызванный игрок может отказаться!", show_alert=True)
+        return
+    
+    await callback.message.delete()
+    await bot.send_message(
+        chat_id,
+        f"❌ {await get_name(opponent_id)} отказался от игры!"
+    )
+    
+    roulette_games.pop(challenger_id, None)
+    roulette_games.pop(opponent_id, None)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("roulette_shoot_"))
+async def roulette_shoot_callback(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, chat_id, player_id, opponent_id = data
+    chat_id = int(chat_id)
+    player_id = int(player_id)
+    opponent_id = int(opponent_id)
+    
+    if callback.from_user.id != player_id:
+        await callback.answer("❌ Сейчас не твой ход!", show_alert=True)
+        return
+    
+    await callback.message.delete()
+    await roulette_shoot(chat_id, player_id, opponent_id)
+    await callback.answer()
+
+async def roulette_shoot(chat_id, player_id, opponent_id):
+    player_name = await get_name(player_id)
+    opponent_name = await get_name(opponent_id)
+    
+    if player_id not in roulette_games or opponent_id not in roulette_games:
+        await bot.send_message(chat_id, "❌ Игра уже завершена!")
+        return
+    
+    bullets = roulette_games[player_id]["bullets"]
+    
+    if not bullets:
+        await bot.send_message(chat_id, "❌ Патроны кончились! Ничья!")
+        roulette_games.pop(player_id, None)
+        roulette_games.pop(opponent_id, None)
+        return
+    
+    shot = bullets.pop(0)
+    
+    if shot == 1:
+        roulette_games.pop(player_id, None)
+        roulette_games.pop(opponent_id, None)
+        
+        await bot.send_message(
+            chat_id,
+            f"🔫 **{player_name}** нажал на курок...\n\n"
+            f"💥 **БОЕВОЙ ПАТРОН!**\n\n"
+            f"💀 **{player_name}** убит!\n\n"
+            f"🏆 **Победитель:** {opponent_name}! 🎉",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    else:
+        next_player = opponent_id
+        
+        if len(bullets) == 0:
+            await bot.send_message(
+                chat_id,
+                f"🔫 **{player_name}** нажал на курок...\n\n"
+                f"💨 **ХОЛОСТОЙ!** Повезло!\n\n"
+                f"⚠️ Патроны кончились! Ничья! 😐",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            roulette_games.pop(player_id, None)
+            roulette_games.pop(opponent_id, None)
+            return
+        
+        await bot.send_message(
+            chat_id,
+            f"🔫 **{player_name}** нажал на курок...\n\n"
+            f"💨 **ХОЛОСТОЙ!** Повезло!\n\n"
+            f"⏳ Теперь очередь **{opponent_name}**...\n"
+            f"💀 Осталось патронов: {len(bullets)}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        roulette_games[player_id]["turn"] = next_player
+        roulette_games[opponent_id]["turn"] = next_player
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔫 ВЫСТРЕЛИТЬ", callback_data=f"roulette_shoot_{chat_id}_{next_player}_{player_id}")]
+        ])
+        
+        await bot.send_message(
+            chat_id,
+            f"🔫 **{opponent_name}**, твой ход! Нажми на кнопку, чтобы выстрелить:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+        return
+
+# ===== КУБЫ =====
+@dp.callback_query(lambda c: c.data.startswith("cube_accept_"))
+async def cube_accept(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, challenger_id, opponent_id = data
+    chat_id = int(chat_id)
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+    if callback.from_user.id != opponent_id:
+        await callback.answer("❌ Только вызванный игрок может согласиться!", show_alert=True)
+        return
+    await callback.message.delete()
+    await bot.send_message(chat_id, f"🎲 **Кубы начались!**\n\n👤 {await get_name(challenger_id)} против {await get_name(opponent_id)}")
+    await asyncio.sleep(1.5)
+    dice1 = await bot.send_dice(chat_id, emoji="🎲")
+    await asyncio.sleep(0.5)
+    dice2 = await bot.send_dice(chat_id, emoji="🎲")
+    total1 = dice1.dice.value + dice2.dice.value
+    await asyncio.sleep(1)
+    await bot.send_message(chat_id, f"🎲 **{await get_name(challenger_id)}** кинул кубики!\n{dice1.dice.value} + {dice2.dice.value} = **{total1}**")
+    await asyncio.sleep(1.5)
+    dice3 = await bot.send_dice(chat_id, emoji="🎲")
+    await asyncio.sleep(0.5)
+    dice4 = await bot.send_dice(chat_id, emoji="🎲")
+    total2 = dice3.dice.value + dice4.dice.value
+    await asyncio.sleep(1)
+    if total1 > total2:
+        result = f"🏆 **Победил {await get_name(challenger_id)}!** ({total1} vs {total2})"
+    elif total2 > total1:
+        result = f"🏆 **Победил {await get_name(opponent_id)}!** ({total1} vs {total2})"
+    else:
+        result = f"🤝 **Ничья!** ({total1} vs {total2})"
+    await bot.send_message(chat_id, f"🎲 **Результат:**\n\n{await get_name(challenger_id)}: {dice1.dice.value} + {dice2.dice.value} = **{total1}**\n{await get_name(opponent_id)}: {dice3.dice.value} + {dice4.dice.value} = **{total2}**\n\n{result}", parse_mode=ParseMode.MARKDOWN)
+    cube_games.pop(challenger_id, None)
+    cube_games.pop(opponent_id, None)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("cube_decline_"))
+async def cube_decline(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, challenger_id, opponent_id = data
+    chat_id = int(chat_id)
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+    if callback.from_user.id != opponent_id:
+        await callback.answer("❌ Только вызванный игрок может отказаться!", show_alert=True)
+        return
+    await callback.message.delete()
+    await bot.send_message(chat_id, f"❌ {await get_name(opponent_id)} отказался играть в кубы.")
+    cube_games.pop(challenger_id, None)
+    cube_games.pop(opponent_id, None)
+    await callback.answer()
+
+# ===== ДУЭЛЬ =====
+@dp.callback_query(lambda c: c.data.startswith("duel_accept_"))
+async def duel_accept(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, challenger_id, opponent_id = data
+    chat_id = int(chat_id)
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+    if callback.from_user.id != opponent_id:
+        await callback.answer("❌ Только вызванный игрок может согласиться!", show_alert=True)
+        return
+    await callback.message.delete()
+    await bot.send_message(chat_id, "🔫 **Дуэль начинается!**\n⏳ Подготовка...")
+    await duel_loop(chat_id, challenger_id, opponent_id, None)
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("duel_decline_"))
+async def duel_decline(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, _, chat_id, challenger_id, opponent_id = data
+    chat_id = int(chat_id)
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+    if callback.from_user.id != opponent_id:
+        await callback.answer("❌ Только вызванный игрок может отказаться!", show_alert=True)
+        return
+    await callback.message.delete()
+    await bot.send_message(chat_id, f"❌ {await get_name(opponent_id)} отказался от дуэли.")
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("duel_shoot_"))
+async def duel_shoot(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 4:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, chat_id, turn_id = data[0], int(data[1]), int(data[2])
+    chat_id = int(chat_id)
+    turn_id = int(turn_id)
+    
+    if callback.from_user.id != turn_id:
+        await callback.answer("❌ Сейчас не твой ход!", show_alert=True)
+        return
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT challenger, opponent, aim_bonus FROM duels WHERE chat_id = ?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("❌ Дуэль уже завершена!", show_alert=True)
+        return
+    challenger, opponent, aim_bonus = row
+    chance = 10 + (aim_bonus * 10)
+    shot = random.randint(1, 100)
+    hit = shot <= chance
+    if hit:
+        winner = callback.from_user.id
+        loser = challenger if winner == opponent else opponent
+        await end_duel(chat_id, winner, loser, f"💥 **ПОПАЛ!** {await get_name(winner)} выстрелил и попал!")
+        await callback.answer("🎯 Попал!")
+    else:
+        await callback.answer("💨 Промах!")
+        new_turn = challenger if callback.from_user.id == opponent else opponent
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("UPDATE duels SET turn = ?, aim_bonus = 0 WHERE chat_id = ?", (new_turn, chat_id))
+        conn.commit()
+        conn.close()
+        await bot.send_message(chat_id, f"💨 **{await get_name(callback.from_user.id)}** промахнулся!\n⏳ Теперь ход {await get_name(new_turn)}")
+        await send_duel_turn(chat_id, challenger, opponent, 0, new_turn)
+
+@dp.callback_query(lambda c: c.data.startswith("duel_aim_"))
+async def duel_aim(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 4:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, chat_id, turn_id = data[0], int(data[1]), int(data[2])
+    chat_id = int(chat_id)
+    turn_id = int(turn_id)
+    
+    if callback.from_user.id != turn_id:
+        await callback.answer("❌ Сейчас не твой ход!", show_alert=True)
+        return
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT challenger, opponent, aim_bonus FROM duels WHERE chat_id = ?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("❌ Дуэль уже завершена!", show_alert=True)
+        return
+    challenger, opponent, aim_bonus = row
+    if aim_bonus >= 9:
+        await callback.answer("❌ Нельзя прицеливаться больше 9 раз!", show_alert=True)
+        return
+    new_aim_bonus = aim_bonus + 1
+    new_turn = challenger if callback.from_user.id == opponent else opponent
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("UPDATE duels SET turn = ?, aim_bonus = ? WHERE chat_id = ?", (new_turn, new_aim_bonus, chat_id))
+    conn.commit()
+    conn.close()
+    await bot.send_message(chat_id, f"🎯 **{await get_name(callback.from_user.id)}** прицелился!\nШанс следующего выстрела: +{new_aim_bonus*10}%")
+    await callback.answer("🎯 Прицелился!")
+    await send_duel_turn(chat_id, challenger, opponent, new_aim_bonus, new_turn)
+
+@dp.callback_query(lambda c: c.data.startswith("duel_skip_"))
+async def duel_skip(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 4:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, chat_id, turn_id = data[0], int(data[1]), int(data[2])
+    chat_id = int(chat_id)
+    turn_id = int(turn_id)
+    
+    if callback.from_user.id != turn_id:
+        await callback.answer("❌ Сейчас не твой ход!", show_alert=True)
+        return
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT challenger, opponent FROM duels WHERE chat_id = ?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("❌ Дуэль уже завершена!", show_alert=True)
+        return
+    challenger, opponent = row
+    new_turn = challenger if callback.from_user.id == opponent else opponent
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("UPDATE duels SET turn = ?, aim_bonus = 0 WHERE chat_id = ?", (new_turn, chat_id))
+    conn.commit()
+    conn.close()
+    await bot.send_message(chat_id, f"⏭️ **{await get_name(callback.from_user.id)}** пропустил ход!\n⏳ Теперь ход {await get_name(new_turn)}")
+    await callback.answer("⏭️ Пропустил!")
+    await send_duel_turn(chat_id, challenger, opponent, 0, new_turn)
+
+# ===== КНБ =====
+@dp.callback_query(lambda c: c.data.startswith("knb_"))
+async def knb_choice_callback(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 6:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, chat_id, player1, player2, choice = data
+    chat_id = int(chat_id)
+    player1 = int(player1)
+    player2 = int(player2)
+    user_id = callback.from_user.id
+    if user_id != player1 and user_id != player2:
+        await callback.answer("❌ Это не твоя игра!", show_alert=True)
+        return
+    game_key = (chat_id, player1, player2)
+    if game_key not in active_knb:
+        await callback.answer("❌ Игра уже завершена!", show_alert=True)
+        return
+    if user_id == player1:
+        knb_choices[(chat_id, player1)] = choice
+        await callback.answer(f"✅ Ты выбрал: {choice}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✊ КАМЕНЬ", callback_data=f"knb_{chat_id}_{player1}_{player2}_камень"),
+                InlineKeyboardButton(text="✌️ НОЖНИЦЫ", callback_data=f"knb_{chat_id}_{player1}_{player2}_ножницы"),
+                InlineKeyboardButton(text="✋ БУМАГА", callback_data=f"knb_{chat_id}_{player1}_{player2}_бумага")
+            ]
+        ])
+        await callback.message.edit_text(
+            text=f"✊✌️✋ **{await get_name(player1)}** вызывает **{await get_name(player2)}** на **Камень/Ножницы/Бумага**!\n\n"
+                 f"🎲 **{await get_name(player2)}**, теперь твой выбор:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+    else:
+        knb_choices[(chat_id, player2)] = choice
+        await callback.answer(f"✅ Ты выбрал: {choice}")
+        choice1 = knb_choices.get((chat_id, player1))
+        choice2 = choice
+        result = get_knb_result(choice1, choice2)
+        if "первый" in result:
+            winner = player1
+            result_text = f"🏆 Победил: {await get_name(winner)}!\n{result}"
+        elif "второй" in result:
+            winner = player2
+            result_text = f"🏆 Победил: {await get_name(winner)}!\n{result}"
+        else:
+            result_text = f"🤝 {result}"
+        await callback.message.edit_text(
+            text=f"✊✌️✋ **Результат игры:**\n\n"
+                 f"📌 {await get_name(player1)} выбрал: **{choice1}**\n"
+                 f"📌 {await get_name(player2)} выбрал: **{choice2}**\n\n"
+                 f"{result_text}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=None
+        )
+        active_knb.discard(game_key)
+        knb_choices.pop((chat_id, player1), None)
+        knb_choices.pop((chat_id, player2), None)
+
+# ===== МОНЕТКА =====
+@dp.callback_query(lambda c: c.data.startswith("coin_"))
+async def coin_callback(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    if len(data) < 6:
+        await callback.answer("❌ Ошибка в данных!", show_alert=True)
+        return
+    _, chat_id, player1, player2, choice = data
+    chat_id = int(chat_id)
+    player1 = int(player1)
+    player2 = int(player2)
+    user_id = callback.from_user.id
+    if user_id != player1 and user_id != player2:
+        await callback.answer("❌ Это не твоя игра!", show_alert=True)
+        return
+    game_key = (chat_id, player1, player2)
+    if game_key not in active_coin:
+        await callback.answer("❌ Игра уже завершена!", show_alert=True)
+        return
+    if user_id == player1:
+        coin_choices[(chat_id, player1)] = choice
+        await callback.answer(f"✅ Ты выбрал: {choice}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🪙 ОРЁЛ", callback_data=f"coin_{chat_id}_{player1}_{player2}_орёл"),
+                InlineKeyboardButton(text="🪙 РЕШКА", callback_data=f"coin_{chat_id}_{player1}_{player2}_решка")
+            ]
+        ])
+        await callback.message.edit_text(
+            text=f"🪙 **{await get_name(player1)}** вызывает **{await get_name(player2)}** на **Монетку**!\n\n"
+                 f"🎲 **{await get_name(player2)}**, теперь твой выбор:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+    else:
+        coin_choices[(chat_id, player2)] = choice
+        await callback.answer(f"✅ Ты выбрал: {choice}")
+        choice1 = coin_choices.get((chat_id, player1))
+        choice2 = choice
+        result = random.choice(["орёл", "решка"])
+        if choice1 == result and choice2 == result:
+            result_text = f"🤝 Ничья! Оба выбрали {result}"
+        elif choice1 == result:
+            winner = player1
+            result_text = f"🏆 Победил: {await get_name(winner)}! (выбрал {choice1}, выпало {result})"
+        elif choice2 == result:
+            winner = player2
+            result_text = f"🏆 Победил: {await get_name(winner)}! (выбрал {choice2}, выпало {result})"
+        else:
+            result_text = f"😅 Никто не угадал! Выпало {result}"
+        await callback.message.edit_text(
+            text=f"🪙 **Результат игры в Монетку:**\n\n"
+                 f"📌 {await get_name(player1)} выбрал: **{choice1}**\n"
+                 f"📌 {await get_name(player2)} выбрал: **{choice2}**\n\n"
+                 f"🪙 Выпало: **{result}**\n\n"
+                 f"{result_text}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=None
+        )
+        active_coin.discard(game_key)
+        coin_choices.pop((chat_id, player1), None)
+        coin_choices.pop((chat_id, player2), None)
+
+# ========== ЗАПУСК ==========
+async def main():
+    init_db()
+    print(f"✅ {BOT_NAME} запущен!")
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
