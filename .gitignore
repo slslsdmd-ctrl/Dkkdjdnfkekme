@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+fable_bot.db
+*.db
+.DS_Store
+*.log
+*.tmp
+*.swp
+venv/
+env/
+.venv/
