@@ -83,6 +83,17 @@ CASUAL_CHAT_MARKERS = (
     "чем занимаешься", "спасибо", "пока", "доброе утро", "добрый вечер"
 )
 
+SEARCH_QUERY_REPLACEMENTS = {
+    "давинчи": "да винчи",
+    "давинчи": "да винчи",
+    "леонардо давинчи": "леонардо да винчи",
+    "леонардо давинч": "леонардо да винчи",
+    "монолиза": "мона лиза",
+    "монолизу": "мона лиза",
+    "монализа": "мона лиза",
+    "монализу": "мона лиза",
+}
+
 
 def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
@@ -108,6 +119,58 @@ def format_reference_answer(title: str, description: str, extract: str) -> str:
     if header and extract:
         return f"{header}\n{extract}"
     return header or extract or None
+
+
+def normalize_search_query(query: str) -> str:
+    cleaned = normalize_text(query).lower().replace("ё", "е")
+    cleaned = re.sub(r"[?!.,:;\"'`()\[\]{}]+", " ", cleaned)
+    cleaned = re.sub(r"\b(фабле|википедия|вики|wiki)\b", " ", cleaned)
+
+    prefixes = (
+        r"^кто\s+такой\s+",
+        r"^кто\s+такая\s+",
+        r"^что\s+такое\s+",
+        r"^кто\s+нарисовал\s+",
+        r"^кто\s+создал\s+",
+        r"^кто\s+написал\s+",
+        r"^расскажи\s+о\s+",
+        r"^расскажи\s+про\s+",
+        r"^объясни\s+",
+    )
+    for prefix in prefixes:
+        cleaned = re.sub(prefix, "", cleaned)
+
+    for wrong, correct in SEARCH_QUERY_REPLACEMENTS.items():
+        cleaned = cleaned.replace(wrong, correct)
+
+    return normalize_text(cleaned)
+
+
+def build_search_queries(query: str):
+    original = normalize_search_query(query)
+    variants = []
+
+    if original:
+        variants.append(original)
+
+    author_match = re.search(r"кто\s+(?:нарисовал|создал|написал)\s+(.+)", query.lower().replace("ё", "е"))
+    if author_match:
+        subject = normalize_search_query(author_match.group(1))
+        if subject:
+            variants.append(f"{subject} автор")
+            variants.append(subject)
+
+    raw_normalized = normalize_search_query(re.sub(r"\b(кто|что|где|когда|почему|как)\b", " ", query, flags=re.IGNORECASE))
+    if raw_normalized:
+        variants.append(raw_normalized)
+
+    seen = set()
+    result = []
+    for item in variants:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def get_number_range(prompt: str):
@@ -925,46 +988,47 @@ async def handle_prices(message: types.Message, text_lower: str, text: str):
 
 # ==================== ПОИСК В ИНТЕРНЕТЕ ====================
 async def search_wikipedia(query: str) -> str:
-    cleaned_query = normalize_text(re.sub(r"\b(википедия|вики|wiki)\b", "", query, flags=re.IGNORECASE))
-    if not cleaned_query:
-        cleaned_query = normalize_text(query)
+    query_variants = build_search_queries(query)
+    if not query_variants:
+        query_variants = [normalize_text(query)]
 
     try:
         async with aiohttp.ClientSession() as session:
             for lang in ("ru", "en"):
-                search_url = (
-                    f"https://{lang}.wikipedia.org/w/api.php?"
-                    f"action=query&list=search&format=json&utf8=1&srlimit=3"
-                    f"&srsearch={urllib.parse.quote(cleaned_query)}"
-                )
-                async with session.get(search_url, timeout=10) as resp:
-                    if resp.status != 200:
-                        continue
-
-                    data = await resp.json()
-                    pages = data.get("query", {}).get("search", [])
-                    for page in pages:
-                        title = page.get("title")
-                        if not title:
+                for cleaned_query in query_variants:
+                    search_url = (
+                        f"https://{lang}.wikipedia.org/w/api.php?"
+                        f"action=query&list=search&format=json&utf8=1&srlimit=5"
+                        f"&srsearch={urllib.parse.quote(cleaned_query)}"
+                    )
+                    async with session.get(search_url, timeout=10) as resp:
+                        if resp.status != 200:
                             continue
 
-                        summary_url = (
-                            f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
-                            f"{urllib.parse.quote(title)}"
-                        )
-                        async with session.get(summary_url, timeout=10) as resp2:
-                            if resp2.status != 200:
+                        data = await resp.json()
+                        pages = data.get("query", {}).get("search", [])
+                        for page in pages:
+                            title = page.get("title")
+                            if not title:
                                 continue
 
-                            data2 = await resp2.json()
-                            extract = data2.get("extract")
-                            if not extract or len(extract) < 40:
-                                continue
+                            summary_url = (
+                                f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
+                                f"{urllib.parse.quote(title)}"
+                            )
+                            async with session.get(summary_url, timeout=10) as resp2:
+                                if resp2.status != 200:
+                                    continue
 
-                            description = data2.get("description", "")
-                            formatted = format_reference_answer(title, description, extract)
-                            if formatted:
-                                return formatted
+                                data2 = await resp2.json()
+                                extract = data2.get("extract")
+                                if not extract or len(extract) < 40:
+                                    continue
+
+                                description = data2.get("description", "")
+                                formatted = format_reference_answer(title, description, extract)
+                                if formatted:
+                                    return formatted
     except:
         pass
     return None
@@ -1113,6 +1177,18 @@ async def generate_image(prompt: str) -> str:
             extra_tags.extend(["avatar", "portrait", "professional photography", "studio lighting"])
         elif "раст" in prompt_lower:
             extra_tags.extend(["rasta", "reggae", "colorful"])
+        elif "черепах" in prompt_lower or "turtle" in prompt_lower:
+            extra_tags.extend([
+                "turtle",
+                "tortoise",
+                "reptile",
+                "shell",
+                "realistic turtle",
+                "not mammal",
+                "not cat",
+                "not lion",
+                "not tiger"
+            ])
         elif "макак" in prompt_lower or "обезьян" in prompt_lower or "шимпанз" in prompt_lower or "горилл" in prompt_lower:
             extra_tags.extend([
                 "monkey",
