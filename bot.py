@@ -96,6 +96,11 @@ SEARCH_QUERY_REPLACEMENTS = {
     "монализу": "мона лиза",
 }
 
+HTTP_HEADERS = {
+    "User-Agent": f"{BOT_NAME}/1.0 (Telegram bot; +https://github.com/slslsdmd-ctrl/Dkkdjdnfkekme)",
+    "Accept": "application/json, text/plain, */*",
+}
+
 
 def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
@@ -121,6 +126,12 @@ def format_reference_answer(title: str, description: str, extract: str) -> str:
     if header and extract:
         return f"{header}\n{extract}"
     return header or extract or None
+
+
+def strip_html_tags(text: str) -> str:
+    text = html.unescape(text or "")
+    text = re.sub(r"<[^>]+>", "", text)
+    return normalize_text(text)
 
 
 def normalize_search_query(query: str) -> str:
@@ -995,7 +1006,7 @@ async def search_wikipedia(query: str) -> str:
         query_variants = [normalize_text(query)]
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS) as session:
             for lang in ("ru", "en"):
                 for cleaned_query in query_variants:
                     search_url = (
@@ -1014,6 +1025,8 @@ async def search_wikipedia(query: str) -> str:
                             if not title:
                                 continue
 
+                            snippet = strip_html_tags(page.get("snippet", ""))
+
                             summary_url = (
                                 f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
                                 f"{urllib.parse.quote(title)}"
@@ -1031,6 +1044,38 @@ async def search_wikipedia(query: str) -> str:
                                 formatted = format_reference_answer(title, description, extract)
                                 if formatted:
                                     return formatted
+
+                            if snippet and len(snippet) > 30:
+                                return format_reference_answer(title, "", snippet)
+    except:
+        pass
+    return None
+
+
+async def search_wikidata(query: str) -> str:
+    query_variants = build_search_queries(query)
+    if not query_variants:
+        query_variants = [normalize_text(query)]
+
+    try:
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS) as session:
+            for lang in ("ru", "en"):
+                for cleaned_query in query_variants:
+                    url = (
+                        "https://www.wikidata.org/w/api.php"
+                        f"?action=wbsearchentities&format=json&limit=5&language={lang}"
+                        f"&search={urllib.parse.quote(cleaned_query)}"
+                    )
+                    async with session.get(url, timeout=10) as resp:
+                        if resp.status != 200:
+                            continue
+
+                        data = await resp.json()
+                        for item in data.get("search", []):
+                            label = item.get("label") or item.get("display", {}).get("label", {}).get("value")
+                            description = item.get("description") or item.get("display", {}).get("description", {}).get("value")
+                            if label and description:
+                                return format_reference_answer(label, description, description)
     except:
         pass
     return None
@@ -1038,7 +1083,7 @@ async def search_wikipedia(query: str) -> str:
 async def search_duckduckgo(query: str) -> str:
     try:
         url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(query)}&format=json&pretty=1&no_html=1&skip_disambig=1"
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS) as session:
             async with session.get(url, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -1056,6 +1101,9 @@ async def search_web(query: str) -> str:
     wiki = await search_wikipedia(query)
     if wiki:
         return wiki
+    wikidata = await search_wikidata(query)
+    if wikidata:
+        return wikidata
     ddg = await search_duckduckgo(query)
     if ddg:
         return ddg
