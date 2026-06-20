@@ -109,6 +109,59 @@ def format_reference_answer(title: str, description: str, extract: str) -> str:
         return f"{header}\n{extract}"
     return header or extract or None
 
+
+def get_number_range(prompt: str):
+    prompt_lower = normalize_text(prompt).lower().replace("ё", "е")
+
+    range_match = re.search(r"(-?\d+)\s*(?:до|-)\s*(-?\d+)", prompt_lower)
+    if range_match:
+        left = int(range_match.group(1))
+        right = int(range_match.group(2))
+        return (min(left, right), max(left, right))
+
+    up_to_match = re.search(r"(?:до|не больше)\s*(-?\d+)", prompt_lower)
+    if up_to_match:
+        right = int(up_to_match.group(1))
+        return (1, right) if right >= 1 else (right, 1)
+
+    numbers = [int(num) for num in re.findall(r"-?\d+", prompt_lower)]
+    if len(numbers) >= 2:
+        return (min(numbers[0], numbers[1]), max(numbers[0], numbers[1]))
+    if len(numbers) == 1:
+        right = numbers[0]
+        return (1, right) if right >= 1 else (right, 1)
+    return None
+
+
+def get_local_smart_answer(prompt: str) -> str:
+    prompt_clean = normalize_text(prompt)
+    prompt_lower = prompt_clean.lower().replace("ё", "е")
+
+    if ("рандом" in prompt_lower or "случайн" in prompt_lower or "загад" in prompt_lower) and "числ" in prompt_lower:
+        number_range = get_number_range(prompt_lower)
+        if number_range:
+            left, right = number_range
+        else:
+            left, right = 1, 100
+
+        if left == right:
+            return f"🎲 Число: **{left}**"
+        return f"🎲 Моё число: **{random.randint(left, right)}**\nДиапазон: от **{left}** до **{right}**"
+
+    if "монетк" in prompt_lower or "орел или решка" in prompt_lower or "орел или решка" in prompt_lower:
+        return f"🪙 Выпало: **{random.choice(['Орёл', 'Решка'])}**"
+
+    if prompt_lower.startswith("выбери ") or prompt_lower.startswith("что выбрать"):
+        choices = [part.strip(" ,.") for part in re.split(r"\s+или\s+|,", prompt_clean) if part.strip(" ,.")]
+        filtered = [choice for choice in choices if choice.lower() not in {"выбери", "что выбрать"}]
+        if len(filtered) >= 2:
+            return f"🤔 Я выбираю: **{random.choice(filtered)}**"
+
+    if prompt_lower.startswith("да или нет") or "ответь да или нет" in prompt_lower:
+        return f"🎯 Ответ: **{random.choice(['Да', 'Нет'])}**"
+
+    return None
+
 # ==================== ИНИЦИАЛИЗАЦИЯ БД ====================
 def init_db():
     conn = sqlite3.connect("fable_bot.db")
@@ -980,6 +1033,11 @@ async def ask_ai(prompt: str) -> str:
     prompt = normalize_text(prompt)
     prompt_lower = prompt.lower()
     print(f"📝 Вопрос: {prompt}")
+
+    smart_local = get_local_smart_answer(prompt)
+    if smart_local:
+        print(f"✅ Найдено в умной локальной логике!")
+        return smart_local
 
     for key, answer in LOCAL_ANSWERS.items():
         if prompt_lower == key or prompt_lower.startswith(f"{key} "):
