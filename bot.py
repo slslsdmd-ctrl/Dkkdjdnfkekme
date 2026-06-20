@@ -1169,7 +1169,8 @@ async def ask_groq(messages) -> str:
 
 async def ask_pollinations(messages) -> str:
     try:
-        headers = {"Content-Type": "application/json"}
+        headers = dict(HTTP_HEADERS)
+        headers["Content-Type"] = "application/json"
         if POLLINATIONS_API_KEY:
             headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
 
@@ -1194,6 +1195,30 @@ async def ask_pollinations(messages) -> str:
                     return reply.strip()
     except:
         pass
+
+    try:
+        system_parts = []
+        user_prompt = ""
+        for message in messages:
+            if message.get("role") == "system":
+                system_parts.append(message.get("content", ""))
+            elif message.get("role") == "user":
+                user_prompt = message.get("content", "")
+
+        simple_prompt = normalize_text(
+            f"{' '.join(system_parts)} Ответь на русском языке на вопрос: {user_prompt}"
+        )
+        encoded = urllib.parse.quote(simple_prompt)
+        url = f"https://text.pollinations.ai/{encoded}?model=openai"
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS) as session:
+            async with session.get(url, timeout=30) as resp:
+                if resp.status == 200:
+                    reply = await resp.text()
+                    reply = re.sub(r'@\w+', '', reply)
+                    return normalize_text(reply)
+    except:
+        pass
+
     return None
 
 
@@ -1311,9 +1336,9 @@ async def generate_image(prompt: str) -> str:
             "tiger, feline, cat, lion, stripes, blurry, low quality, deformed, worst quality"
         )
         return (
-            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"https://gen.pollinations.ai/image/{encoded}"
             f"?width=1024&height=1024&nologo=true&enhance=true&model=flux"
-            f"&negative_prompt={negative_prompt}&seed=-1"
+            f"&negative_prompt={negative_prompt}&safe=true&seed=-1"
         )
     except Exception as e:
         print(f"Ошибка генерации: {e}")
