@@ -12,12 +12,14 @@ import aiohttp
 import json
 import urllib.parse
 import hashlib
+from collections import deque
 from dotenv import load_dotenv
 
 load_dotenv()
 
 TOKEN = os.getenv('BOT_TOKEN')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+POLLINATIONS_API_KEY = os.getenv('POLLINATIONS_API_KEY')
 BOT_NAME = "Fable"
 
 if not TOKEN:
@@ -1059,8 +1061,34 @@ async def search_web(query: str) -> str:
         return ddg
     return None
 
+
+def build_ai_messages(prompt: str, reference_context: str = None, chat_id: int = None):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты — Fable, умный ИИ-помощник в Telegram. "
+                "Отвечай на русском языке естественно, дружелюбно и по делу. "
+                "Поддерживай нормальный диалог, понимай простые вопросы и команды, "
+                "объясняй ясно и не уходи от ответа."
+            )
+        }
+    ]
+
+    if chat_id is not None:
+        messages.extend(get_dialog_context(chat_id))
+
+    if reference_context:
+        messages.append({
+            "role": "system",
+            "content": f"Используй этот справочный контекст как источник фактов:\n{reference_context}"
+        })
+
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
 # ==================== GROQ ИИ ====================
-async def ask_groq(prompt: str) -> str:
+async def ask_groq(messages) -> str:
     if not GROQ_API_KEY:
         return None
     try:
@@ -1071,18 +1099,7 @@ async def ask_groq(prompt: str) -> str:
             }
             payload = {
                 "model": "llama3-70b-8192",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Ты — Fable, умный ИИ-помощник в Telegram. "
-                            "Отвечай на русском языке естественно, дружелюбно и по делу. "
-                            "Умей нормально общаться, поддерживать диалог, объяснять простыми словами и отвечать на вопросы. "
-                            "Если в сообщении есть справочный контекст, используй его как основу ответа и не выдумывай факты."
-                        )
-                    },
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": messages,
                 "temperature": 0.6,
                 "max_tokens": 700
             }
@@ -1101,8 +1118,52 @@ async def ask_groq(prompt: str) -> str:
         pass
     return None
 
+
+async def ask_pollinations(messages) -> str:
+    try:
+        headers = {"Content-Type": "application/json"}
+        if POLLINATIONS_API_KEY:
+            headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
+
+        payload = {
+            "model": "openai",
+            "messages": messages,
+            "temperature": 0.5,
+            "max_tokens": 700
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://gen.pollinations.ai/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=30
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    reply = data["choices"][0]["message"]["content"]
+                    reply = re.sub(r'@\w+', '', reply)
+                    return reply.strip()
+    except:
+        pass
+    return None
+
+
+async def ask_llm(prompt: str, reference_context: str = None, chat_id: int = None) -> str:
+    messages = build_ai_messages(prompt, reference_context=reference_context, chat_id=chat_id)
+
+    reply = await ask_groq(messages)
+    if reply and len(reply) > 10:
+        return reply
+
+    reply = await ask_pollinations(messages)
+    if reply and len(reply) > 10:
+        return reply
+
+    return None
+
 # ==================== УМНЫЙ ИИ ====================
-async def ask_ai(prompt: str) -> str:
+async def ask_ai(prompt: str, chat_id: int = None) -> str:
     prompt = normalize_text(prompt)
     prompt_lower = prompt.lower()
     print(f"📝 Вопрос: {prompt}")
@@ -1124,29 +1185,14 @@ async def ask_ai(prompt: str) -> str:
 
     factual_query = needs_web_search(prompt)
 
-    if GROQ_API_KEY:
-        try:
-            search_result = await search_web(prompt) if factual_query else None
-            if search_result and len(search_result) > 20:
-                groq_prompt = f"""Ответь на вопрос пользователя на русском языке.
-
-Вопрос пользователя: {prompt}
-
-Проверенный справочный контекст:
-{search_result}
-
-Дай понятный, нормальный ответ без воды. Если уместно, добавь короткое пояснение простыми словами."""
-                reply = await ask_groq(groq_prompt)
-                if reply and len(reply) > 10:
-                    save_cached_answer(prompt, reply)
-                    return reply
-
-            reply = await ask_groq(prompt)
-            if reply and len(reply) > 10:
-                save_cached_answer(prompt, reply)
-                return reply
-        except:
-            pass
+    try:
+        search_result = await search_web(prompt) if factual_query else None
+        reply = await ask_llm(prompt, reference_context=search_result, chat_id=chat_id)
+        if reply and len(reply) > 10:
+            save_cached_answer(prompt, reply)
+            return reply
+    except:
+        pass
 
     wiki_result = await search_wikipedia(prompt)
     if wiki_result and len(wiki_result) > 20:
@@ -1213,7 +1259,14 @@ async def generate_image(prompt: str) -> str:
 
         clean_prompt = f"{clean_prompt}, {', '.join(extra_tags)}"
         encoded = urllib.parse.quote(clean_prompt)
-        return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&enhance=true&model=flux"
+        negative_prompt = urllib.parse.quote(
+            "tiger, feline, cat, lion, stripes, blurry, low quality, deformed, worst quality"
+        )
+        return (
+            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"?width=1024&height=1024&nologo=true&enhance=true&model=flux"
+            f"&negative_prompt={negative_prompt}&seed=-1"
+        )
     except Exception as e:
         print(f"Ошибка генерации: {e}")
         return None
@@ -1255,6 +1308,22 @@ knb_choices = {}
 active_coin = {}
 coin_choices = {}
 marriage_proposals = {}
+dialog_context = {}
+
+
+def remember_dialog(chat_id: int, user_text: str = None, bot_text: str = None):
+    if chat_id not in dialog_context:
+        dialog_context[chat_id] = deque(maxlen=12)
+    if user_text:
+        dialog_context[chat_id].append({"role": "user", "content": normalize_text(user_text)})
+    if bot_text:
+        dialog_context[chat_id].append({"role": "assistant", "content": normalize_text(bot_text)})
+
+
+def get_dialog_context(chat_id: int, limit: int = 8):
+    if chat_id not in dialog_context:
+        return []
+    return list(dialog_context[chat_id])[-limit:]
 
 # ==================== ИГРЫ ====================
 async def roulette_shoot(chat_id, player_id, opponent_id):
@@ -1445,8 +1514,9 @@ async def handle_all_messages(message: types.Message):
             clean = "привет"
         
         await bot.send_chat_action(message.chat.id, "typing")
-        reply = await ask_ai(clean)
+        reply = await ask_ai(clean, chat_id=message.chat.id)
         if reply:
+            remember_dialog(message.chat.id, user_text=clean, bot_text=reply)
             await message.reply(reply)
         return
 
@@ -2448,6 +2518,7 @@ async def main():
     print(f"✅ {BOT_NAME} запущен!")
     print(f"🤖 Токен: {'✅' if TOKEN else '❌'}")
     print(f"🔑 Groq: {'✅' if GROQ_API_KEY else '❌'}")
+    print(f"🧠 Pollinations LLM: {'✅' if POLLINATIONS_API_KEY else '⚠️ без ключа, пробую free режим'}")
     print(f"💼 Работ: {len(JOBS)}")
     print(f"🏪 Бизнесов: {len(BUSINESSES)}")
     print(f"💰 Монеты сохраняются в БД!")
