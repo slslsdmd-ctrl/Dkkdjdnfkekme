@@ -7,6 +7,7 @@ from aiogram.types import ChatPermissions, InlineKeyboardMarkup, InlineKeyboardB
 from aiogram.enums import ParseMode
 import os
 import re
+import html
 import aiohttp
 import json
 import urllib.parse
@@ -70,6 +71,43 @@ LOCAL_ANSWERS = {
     "расскажи о себе": f"🤖 Я {BOT_NAME} — создан для помощи в чате. Умею отвечать на вопросы, генерировать картинки по запросу, показывать курсы валют и многое другое!",
     "что умеешь": f"🤖 Я умею:\n• Отвечать на вопросы\n• Генерировать картинки\n• Показывать курсы валют и криптовалют\n• Играть в игры (кубы, дуэль, казино)\n• РП команды\n• И многое другое! Напиши 'команды' для полного списка.",
 }
+
+FACTUAL_MARKERS = (
+    "кто", "что", "где", "когда", "почему", "зачем", "как",
+    "объясни", "расскажи", "сколько", "какой", "какая", "какие",
+    "википед", "wiki", "определение", "значение", "история"
+)
+
+CASUAL_CHAT_MARKERS = (
+    "привет", "здравствуй", "как дела", "как ты", "что делаешь",
+    "чем занимаешься", "спасибо", "пока", "доброе утро", "добрый вечер"
+)
+
+
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def needs_web_search(prompt: str) -> bool:
+    prompt_lower = normalize_text(prompt).lower()
+    if any(marker in prompt_lower for marker in CASUAL_CHAT_MARKERS):
+        return False
+    return any(marker in prompt_lower for marker in FACTUAL_MARKERS)
+
+
+def format_reference_answer(title: str, description: str, extract: str) -> str:
+    parts = []
+    if title:
+        parts.append(title.strip())
+    if description:
+        parts.append(description.strip())
+
+    header = " — ".join(parts)
+    extract = normalize_text(html.unescape(extract))
+
+    if header and extract:
+        return f"{header}\n{extract}"
+    return header or extract or None
 
 # ==================== ИНИЦИАЛИЗАЦИЯ БД ====================
 def init_db():
@@ -825,38 +863,46 @@ async def handle_prices(message: types.Message, text_lower: str, text: str):
 
 # ==================== ПОИСК В ИНТЕРНЕТЕ ====================
 async def search_wikipedia(query: str) -> str:
+    cleaned_query = normalize_text(re.sub(r"\b(википедия|вики|wiki)\b", "", query, flags=re.IGNORECASE))
+    if not cleaned_query:
+        cleaned_query = normalize_text(query)
+
     try:
-        search_url = f"https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&srlimit=1"
         async with aiohttp.ClientSession() as session:
-            async with session.get(search_url, timeout=10) as resp:
-                if resp.status == 200:
+            for lang in ("ru", "en"):
+                search_url = (
+                    f"https://{lang}.wikipedia.org/w/api.php?"
+                    f"action=query&list=search&format=json&utf8=1&srlimit=3"
+                    f"&srsearch={urllib.parse.quote(cleaned_query)}"
+                )
+                async with session.get(search_url, timeout=10) as resp:
+                    if resp.status != 200:
+                        continue
+
                     data = await resp.json()
-                    pages = data.get('query', {}).get('search', [])
-                    if pages:
-                        title = pages[0]['title']
-                        url = f"https://ru.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
-                        async with session.get(url, timeout=10) as resp2:
-                            if resp2.status == 200:
-                                data2 = await resp2.json()
-                                if "extract" in data2:
-                                    return data2["extract"]
-    except:
-        pass
-    try:
-        search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&format=json&srlimit=1"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(search_url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    pages = data.get('query', {}).get('search', [])
-                    if pages:
-                        title = pages[0]['title']
-                        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
-                        async with session.get(url, timeout=10) as resp2:
-                            if resp2.status == 200:
-                                data2 = await resp2.json()
-                                if "extract" in data2:
-                                    return data2["extract"]
+                    pages = data.get("query", {}).get("search", [])
+                    for page in pages:
+                        title = page.get("title")
+                        if not title:
+                            continue
+
+                        summary_url = (
+                            f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
+                            f"{urllib.parse.quote(title)}"
+                        )
+                        async with session.get(summary_url, timeout=10) as resp2:
+                            if resp2.status != 200:
+                                continue
+
+                            data2 = await resp2.json()
+                            extract = data2.get("extract")
+                            if not extract or len(extract) < 40:
+                                continue
+
+                            description = data2.get("description", "")
+                            formatted = format_reference_answer(title, description, extract)
+                            if formatted:
+                                return formatted
     except:
         pass
     return None
@@ -900,11 +946,19 @@ async def ask_groq(prompt: str) -> str:
             payload = {
                 "model": "llama3-70b-8192",
                 "messages": [
-                    {"role": "system", "content": "Ты — Fable, умный ИИ-помощник. Отвечай на русском языке, развёрнуто, по делу."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты — Fable, умный ИИ-помощник в Telegram. "
+                            "Отвечай на русском языке естественно, дружелюбно и по делу. "
+                            "Умей нормально общаться, поддерживать диалог, объяснять простыми словами и отвечать на вопросы. "
+                            "Если в сообщении есть справочный контекст, используй его как основу ответа и не выдумывай факты."
+                        )
+                    },
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.7,
-                "max_tokens": 500
+                "temperature": 0.6,
+                "max_tokens": 700
             }
             async with session.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -923,75 +977,88 @@ async def ask_groq(prompt: str) -> str:
 
 # ==================== УМНЫЙ ИИ ====================
 async def ask_ai(prompt: str) -> str:
-    prompt_lower = prompt.lower().strip()
+    prompt = normalize_text(prompt)
+    prompt_lower = prompt.lower()
     print(f"📝 Вопрос: {prompt}")
-    
-    try:
-        wiki_result = await search_wikipedia(prompt)
-        if wiki_result and len(wiki_result) > 20:
-            save_cached_answer(prompt, wiki_result)
-            print(f"✅ Найдено в Википедии!")
-            return f"📚 {wiki_result[:1500]}"
-    except:
-        pass
-    
+
     for key, answer in LOCAL_ANSWERS.items():
-        if key in prompt_lower:
+        if prompt_lower == key or prompt_lower.startswith(f"{key} "):
             print(f"✅ Найдено в локальной базе!")
             return answer
-    
+
     cached = get_cached_answer(prompt)
     if cached:
         print(f"✅ Найдено в кэше!")
         return cached
-    
+
+    factual_query = needs_web_search(prompt)
+
     if GROQ_API_KEY:
         try:
-            search_result = await search_web(prompt)
-            if search_result:
-                groq_prompt = f"""Вопрос: {prompt}
-Информация: {search_result}
-Дай краткий ответ на русском."""
+            search_result = await search_web(prompt) if factual_query else None
+            if search_result and len(search_result) > 20:
+                groq_prompt = f"""Ответь на вопрос пользователя на русском языке.
+
+Вопрос пользователя: {prompt}
+
+Проверенный справочный контекст:
+{search_result}
+
+Дай понятный, нормальный ответ без воды. Если уместно, добавь короткое пояснение простыми словами."""
                 reply = await ask_groq(groq_prompt)
                 if reply and len(reply) > 10:
                     save_cached_answer(prompt, reply)
                     return reply
+
             reply = await ask_groq(prompt)
             if reply and len(reply) > 10:
                 save_cached_answer(prompt, reply)
                 return reply
         except:
             pass
-    
+
+    wiki_result = await search_wikipedia(prompt)
+    if wiki_result and len(wiki_result) > 20:
+        save_cached_answer(prompt, wiki_result)
+        print(f"✅ Найдено в Википедии!")
+        return f"📚 {wiki_result[:1500]}"
+
     ddg_result = await search_duckduckgo(prompt)
     if ddg_result and len(ddg_result) > 20:
         save_cached_answer(prompt, ddg_result)
         return f"🔍 {ddg_result[:1500]}"
-    
+
     print(f"❌ Ничего не найдено!")
-    return "❌ Не могу найти ответ. Попробуй переформулировать вопрос."
+    return "❌ Пока не смог найти точный ответ. Попробуй уточнить вопрос или сформулировать его чуть подробнее."
 
 # ==================== ГЕНЕРАЦИЯ КАРТИНОК ====================
 async def generate_image(prompt: str) -> str:
     try:
-        clean_prompt = prompt.strip()
-        if "ава" in clean_prompt.lower() or "аватарк" in clean_prompt.lower():
-            clean_prompt = f"{clean_prompt}, avatar, portrait, professional photography, 4k, detailed, high quality, studio lighting"
-        elif "раст" in clean_prompt.lower():
-            clean_prompt = f"{clean_prompt}, rasta, reggae, colorful, detailed, 4k, high quality"
-        elif "человек" in clean_prompt.lower() or "девушк" in clean_prompt.lower() or "парень" in clean_prompt.lower():
-            clean_prompt = f"{clean_prompt}, realistic human, professional photography, 4k, detailed, high quality, studio lighting"
-        elif "машин" in clean_prompt.lower() or "автомобил" in clean_prompt.lower():
-            clean_prompt = f"{clean_prompt}, realistic car, professional photography, 4k, detailed"
-        elif "природа" in clean_prompt.lower() or "пейзаж" in clean_prompt.lower():
-            clean_prompt = f"{clean_prompt}, realistic nature, professional photography, 4k, detailed"
-        elif "животн" in clean_prompt.lower() or "кот" in clean_prompt.lower() or "собак" in clean_prompt.lower():
-            clean_prompt = f"{clean_prompt}, professional photography, 4k, detailed, high quality"
+        clean_prompt = normalize_text(prompt)
+        prompt_lower = clean_prompt.lower()
+
+        extra_tags = ["high quality", "highly detailed", "accurate to request"]
+        if "тигр" not in prompt_lower and "tiger" not in prompt_lower:
+            extra_tags.append("no tiger")
+
+        if "ава" in prompt_lower or "аватарк" in prompt_lower:
+            extra_tags.extend(["avatar", "portrait", "professional photography", "studio lighting"])
+        elif "раст" in prompt_lower:
+            extra_tags.extend(["rasta", "reggae", "colorful"])
+        elif "человек" in prompt_lower or "девушк" in prompt_lower or "парень" in prompt_lower:
+            extra_tags.extend(["realistic human", "professional photography", "studio lighting"])
+        elif "машин" in prompt_lower or "автомобил" in prompt_lower:
+            extra_tags.extend(["realistic car", "professional photography"])
+        elif "природа" in prompt_lower or "пейзаж" in prompt_lower:
+            extra_tags.extend(["realistic nature", "professional photography"])
+        elif "животн" in prompt_lower or "кот" in prompt_lower or "собак" in prompt_lower:
+            extra_tags.extend(["realistic animal", "professional photography"])
         else:
-            clean_prompt = f"{clean_prompt}, professional photography, 4k, detailed, high quality"
-        
+            extra_tags.extend(["professional photography", "4k"])
+
+        clean_prompt = f"{clean_prompt}, {', '.join(extra_tags)}"
         encoded = urllib.parse.quote(clean_prompt)
-        return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&model=flux"
+        return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&enhance=true&model=flux"
     except Exception as e:
         print(f"Ошибка генерации: {e}")
         return None
@@ -1192,13 +1259,15 @@ async def handle_all_messages(message: types.Message):
 
     # ==================== ОТВЕТЫ НА "ФАБЛЕ" ====================
     if "фабле" in text_lower or f"@{BOT_NAME.lower()}" in text_lower:
-        clean = text_lower.replace("фабле", "").replace(f"@{BOT_NAME.lower()}", "").strip()
+        clean = re.sub(rf"(?i)\bфабле\b", "", text)
+        clean = re.sub(rf"(?i)@{re.escape(BOT_NAME)}", "", clean).strip()
+        clean_lower = clean.lower()
         
         # Генерация картинок
-        if clean.startswith("сгенерируй") or clean.startswith("нарисуй") or clean.startswith("фото"):
-            if clean.startswith("сгенерируй"):
+        if clean_lower.startswith("сгенерируй") or clean_lower.startswith("нарисуй") or clean_lower.startswith("фото"):
+            if clean_lower.startswith("сгенерируй"):
                 prompt = clean[11:].strip()
-            elif clean.startswith("нарисуй"):
+            elif clean_lower.startswith("нарисуй"):
                 prompt = clean[8:].strip()
             else:
                 prompt = clean[5:].strip()
