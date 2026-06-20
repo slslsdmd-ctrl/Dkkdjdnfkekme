@@ -137,7 +137,16 @@ def get_local_smart_answer(prompt: str) -> str:
     prompt_clean = normalize_text(prompt)
     prompt_lower = prompt_clean.lower().replace("ё", "е")
 
-    if ("рандом" in prompt_lower or "случайн" in prompt_lower or "загад" in prompt_lower) and "числ" in prompt_lower:
+    wants_number = (
+        "рандом" in prompt_lower
+        or "случайн" in prompt_lower
+        or "загад" in prompt_lower
+        or "загод" in prompt_lower
+        or ("скажи" in prompt_lower and "числ" in prompt_lower)
+        or ("назови" in prompt_lower and "числ" in prompt_lower)
+    )
+
+    if wants_number and "числ" in prompt_lower:
         number_range = get_number_range(prompt_lower)
         if number_range:
             left, right = number_range
@@ -1098,11 +1107,23 @@ async def generate_image(prompt: str) -> str:
         extra_tags = ["high quality", "highly detailed", "accurate to request"]
         if "тигр" not in prompt_lower and "tiger" not in prompt_lower:
             extra_tags.append("no tiger")
+            extra_tags.append("not a tiger")
 
         if "ава" in prompt_lower or "аватарк" in prompt_lower:
             extra_tags.extend(["avatar", "portrait", "professional photography", "studio lighting"])
         elif "раст" in prompt_lower:
             extra_tags.extend(["rasta", "reggae", "colorful"])
+        elif "макак" in prompt_lower or "обезьян" in prompt_lower or "шимпанз" in prompt_lower or "горилл" in prompt_lower:
+            extra_tags.extend([
+                "monkey",
+                "macaque",
+                "primate",
+                "realistic monkey",
+                "not feline",
+                "not cat",
+                "not lion",
+                "not tiger"
+            ])
         elif "человек" in prompt_lower or "девушк" in prompt_lower or "парень" in prompt_lower:
             extra_tags.extend(["realistic human", "professional photography", "studio lighting"])
         elif "машин" in prompt_lower or "автомобил" in prompt_lower:
