@@ -134,6 +134,43 @@ def strip_html_tags(text: str) -> str:
     return normalize_text(text)
 
 
+def build_soft_fallback_answer(prompt: str) -> str:
+    prompt_clean = normalize_text(prompt)
+    prompt_lower = prompt_clean.lower().replace("ё", "е")
+
+    who_match = re.search(r"кто\s+(?:такой|такая)?\s*(.+)", prompt_lower)
+    if who_match and who_match.group(1).strip():
+        subject = who_match.group(1).strip(" .?!,")
+        return (
+            f"🤖 По памяти, речь про **{subject}**. "
+            "Сейчас не смог подтянуть точную справку из источников, "
+            "но могу продолжить диалог и попробовать объяснить проще или короче. "
+            f"Например: `фабле кратко кто такой {subject}`"
+        )
+
+    what_match = re.search(r"что\s+(?:такое|это)?\s*(.+)", prompt_lower)
+    if what_match and what_match.group(1).strip():
+        subject = what_match.group(1).strip(" .?!,")
+        return (
+            f"🤖 Похоже, ты спрашиваешь про **{subject}**. "
+            "Сейчас у меня нет точной справки из сети, но я могу объяснить это простыми словами, "
+            "если напишешь чуть конкретнее, что именно нужно: определение, пример или сравнение."
+        )
+
+    if "как" in prompt_lower:
+        return (
+            "🤖 Могу помочь с этим вопросом. "
+            "Если хочешь более точный ответ, напиши чуть конкретнее, что именно нужно: "
+            "кратко, подробно, по шагам или простыми словами."
+        )
+
+    return (
+        "🤖 Я на связи. Сейчас не удалось подтянуть точный факт из источников, "
+        "но я могу продолжить разговор и ответить в более простом виде. "
+        "Попробуй спросить короче или уточни, что именно тебе нужно."
+    )
+
+
 def normalize_search_query(query: str) -> str:
     cleaned = normalize_text(query).lower().replace("ё", "е")
     cleaned = re.sub(r"[?!.,:;\"'`()\[\]{}]+", " ", cleaned)
@@ -1279,7 +1316,7 @@ async def ask_ai(prompt: str, chat_id: int = None) -> str:
         return f"🔍 {ddg_result[:1500]}"
 
     print(f"❌ Ничего не найдено!")
-    return "❌ Пока не смог найти точный ответ. Попробуй уточнить вопрос или сформулировать его чуть подробнее."
+    return build_soft_fallback_answer(prompt)
 
 # ==================== ГЕНЕРАЦИЯ КАРТИНОК ====================
 async def generate_image(prompt: str) -> str:
@@ -1287,10 +1324,17 @@ async def generate_image(prompt: str) -> str:
         clean_prompt = normalize_text(prompt)
         prompt_lower = clean_prompt.lower()
 
-        extra_tags = ["high quality", "highly detailed", "accurate to request"]
+        extra_tags = [
+            "high quality",
+            "highly detailed",
+            "accurate to request",
+            "follow the request exactly",
+            "only the requested subject"
+        ]
         if "тигр" not in prompt_lower and "tiger" not in prompt_lower:
             extra_tags.append("no tiger")
             extra_tags.append("not a tiger")
+            extra_tags.append("no big cats")
 
         if "ава" in prompt_lower or "аватарк" in prompt_lower:
             extra_tags.extend(["avatar", "portrait", "professional photography", "studio lighting"])
@@ -1330,14 +1374,20 @@ async def generate_image(prompt: str) -> str:
         else:
             extra_tags.extend(["professional photography", "4k"])
 
-        clean_prompt = f"{clean_prompt}, {', '.join(extra_tags)}"
+        strict_prompt = (
+            f"Generate exactly this: {clean_prompt}. "
+            f"The image must show only the requested subject. "
+            f"Do not replace it with a tiger, lion, cat or any other animal. "
+            f"{', '.join(extra_tags)}"
+        )
+        encoded = urllib.parse.quote(strict_prompt)
         encoded = urllib.parse.quote(clean_prompt)
         negative_prompt = urllib.parse.quote(
-            "tiger, feline, cat, lion, stripes, blurry, low quality, deformed, worst quality"
+            "tiger, feline, cat, lion, big cat, stripes, wrong animal, wrong subject, blurry, low quality, deformed, worst quality"
         )
         return (
             f"https://gen.pollinations.ai/image/{encoded}"
-            f"?width=1024&height=1024&nologo=true&enhance=true&model=flux"
+            f"?width=1024&height=1024&nologo=true&enhance=false&model=gptimage"
             f"&negative_prompt={negative_prompt}&safe=true&seed=-1"
         )
     except Exception as e:
