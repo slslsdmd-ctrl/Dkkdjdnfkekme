@@ -737,3 +737,554 @@ RP_ACTIONS={
     "избить":["🔨 {user} избил {target}!"],
     "уебать":["💥 {user} уебал {target}!"],
 }
+# ==================== ОСНОВНОЙ ОБРАБОТЧИК ====================
+@dp.message()
+async def handle_all_messages(message: types.Message):
+    if not message.text: return
+    text = message.text.strip(); tl = text.lower()
+    uid = message.from_user.id; cid = message.chat.id
+
+    # Админка в ЛС
+    if cid == uid and uid == YOUR_ID:
+        if tl.startswith("+промокод"):
+            args = text.split()
+            if len(args) >= 4:
+                try: uses = int(args[3])
+                except: uses = 1
+                coins = int(args[4]) if len(args) >= 5 and args[4].isdigit() else 0
+                await create_promocode(args[1].upper(), uid, coins, args[2].lower(), uses)
+                await message.reply(f"✅ Промокод **{args[1].upper()}** создан!\n🎁 {RARE_ITEMS.get(args[2].lower(),{}).get('name',args[2])}\n👥 {uses} исп.\n💰 {coins} монет")
+            return
+        if tl.startswith("+монеты"):
+            args = text.split()
+            if len(args) >= 3:
+                try: await add_coins(int(args[1]), int(args[1]), int(args[2])); await message.reply("✅")
+                except: pass
+            return
+        if tl.startswith("+дать"):
+            args = text.split()
+            if len(args) >= 3:
+                try:
+                    qty = int(args[3]) if len(args) >= 4 else 1
+                    await add_item(int(args[1]), int(args[1]), args[2].lower(), qty); await message.reply("✅")
+                except: pass
+            return
+
+    # Чат
+    if message.chat.type in ["group", "supergroup"]:
+        await add_coins(uid, cid, 1); await add_msg_count(uid, cid)
+        st = await get_chat_settings(cid)
+        if st["anti_spam"] and await is_spam(uid, cid):
+            try: await bot.restrict_chat_member(cid, uid, ChatPermissions(can_send_messages=False), until_date=datetime.now()+timedelta(minutes=10))
+            except: pass
+            return
+        if st["anti_links"] and re.search(r'https?://|t\.me/', text) and await get_role(uid, cid) < 5:
+            try: await message.delete()
+            except: pass
+            return
+
+    try:
+        for admin in await bot.get_chat_administrators(cid): await set_role(admin.user.id, cid, 10)
+    except: pass
+    if uid == YOUR_ID: await set_role(uid, cid, 10)
+
+    if message.new_chat_members:
+        for user in message.new_chat_members:
+            if user.id == bot.id: await bot.send_message(cid, f"👑 **{BOT_NAME} активирован!**\nКоманды: `команды`", parse_mode=ParseMode.MARKDOWN); continue
+        return
+
+    is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
+    is_fable = "фабле" in tl or "fable" in tl
+    is_mention = f"@{BOT_USERNAME}" in tl
+
+    if is_reply or is_fable or is_mention:
+        clean = text
+        if is_mention: clean = re.sub(rf"@{BOT_USERNAME}", "", clean, flags=re.IGNORECASE).strip()
+        else: clean = re.sub(r"(?i)\bфабле\b|\bfable\b", "", clean).strip()
+        cl = clean.lower()
+
+        if cl.startswith(("сгенерируй","нарисуй","фото","покажи")):
+            for pfx in ["сгенерируй","нарисуй","фото","покажи"]:
+                if cl.startswith(pfx): prompt = clean[len(pfx):].strip(); break
+            if prompt:
+                await bot.send_chat_action(cid, "upload_photo")
+                img = await generate_image(prompt)
+                if img:
+                    try: await bot.send_photo(cid, img, caption=f"🎨 {prompt}")
+                    except: await message.reply(f"❌ Ошибка!\n{img}")
+                else: await message.reply("❌ Не удалось")
+                return
+
+        if any(w in cl for w in ["время","часов","который час"]):
+            await message.reply(get_time_response(cl), parse_mode=ParseMode.MARKDOWN); return
+
+        if any(w in cl for w in ["дата","число","какое сегодня"]):
+            await message.reply(f"📅 **{datetime.now().strftime('%d.%m.%Y')}**", parse_mode=ParseMode.MARKDOWN); return
+
+        if cl.startswith(("погода","какая погода")):
+            city = "Москва"
+            for pfx in ["погода в ","погода ","какая погода в ","какая погода "]:
+                if cl.startswith(pfx): city = cl[len(pfx):].strip() or "Москва"; break
+            await bot.send_chat_action(cid, "typing")
+            await message.reply(await get_weather(city), parse_mode=ParseMode.MARKDOWN); return
+
+        if cl.startswith("переведи"):
+            args = clean.split(maxsplit=1)
+            if len(args) > 1:
+                target = "en" if any(c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" for c in args[1].lower()) else "ru"
+                await message.reply(f"🌐 {await translate_text(args[1], target)}"); return
+
+        if cl.startswith(("найди","поищи","что такое","кто такой","расскажи","объясни")):
+            await bot.send_chat_action(cid, "typing")
+            result = await smart_web_search(clean)
+            if result: await message.reply(f"🔍 {result.get('source','')}\n\n{result.get('extract','')[:2000]}")
+            else: await message.reply("❌ Ничего не найдено")
+            return
+
+        if cl == "стих" or cl.startswith("напиши стих"):
+            reply = await ask_llm("напиши короткий стих на русском")
+            await message.reply(reply or "❌ Не получилось"); return
+
+        if cl.startswith("запомни "):
+            fact = clean[8:].strip()
+            if fact: await save_user_fact(uid, cid, fact); await message.reply(f"🧠 Запомнил: **{fact}**", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        if cl in ["что ты знаешь обо мне","что ты обо мне знаешь","мои факты"]:
+            facts = await get_user_facts(uid, cid)
+            if facts:
+                txt = "🧠 **Что я знаю о тебе:**\n\n"
+                for f in facts: txt += f"• {f}\n"
+                await message.reply(txt, parse_mode=ParseMode.MARKDOWN)
+            else: await message.reply("Пока ничего не знаю о тебе. Расскажи что-нибудь через `фабле запомни факт`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        if not clean: clean = "привет"
+        await bot.send_chat_action(cid, "typing")
+        reply = await ask_ai(clean, cid, uid)
+        if reply: await message.reply(reply)
+        return
+
+    ulvl = await get_role(uid, cid)
+
+    if tl in ["профиль","кто я","я"]:
+        name = await get_name(uid); rep = await get_rep(uid, cid)
+        mc = await get_msg_count(uid, cid); items = await get_inventory(uid, cid)
+        clan = await get_user_clan(uid, cid)
+        pt = f"👤 **{name}**\n⭐ Уровень: **{ulvl}**\n👍 Реп: **{rep}**\n💬 Сообщений: **{mc}**\n"
+        if clan: pt += f"🏰 Клан: **{clan[1]}**\n"
+        if items:
+            pt += "\n🎒 **Предметы:**\n"
+            for iname, qty in items[:10]: pt += f"• {RARE_ITEMS.get(iname,{}).get('name',iname)} x{qty}\n"
+        await message.reply(pt, parse_mode=ParseMode.MARKDOWN); return
+
+    for action in RP_ACTIONS:
+        if tl == action:
+            if not message.reply_to_message: return
+            tid = message.reply_to_message.from_user.id
+            if tid == uid: await message.reply("❌ Нельзя!"); return
+            await message.reply(random.choice(RP_ACTIONS[action]).format(user=await get_name(uid), target=await get_name(tid))); return
+
+    if tl.startswith("режим "):
+        mode = tl[6:].strip()
+        if mode in ["normal","sarcasm","philosopher","poet"]: await set_bot_mode(cid, mode); await message.reply(f"🎭 Режим: **{mode}**")
+        return
+
+    if tl.startswith("язык "):
+        lang = tl[5:].strip()
+        if lang in ["ru","en"]: await set_user_lang(uid, lang); await message.reply(f"🌐 Язык: **{lang.upper()}**")
+        return
+
+    if tl.startswith("промо"):
+        args = text.split()
+        if len(args) >= 2: await message.reply(await use_promocode(args[1].upper(), uid, cid))
+        return
+
+    if tl.startswith("рынок"):
+        args = text.split()
+        if len(args) >= 2 and args[1] == "продать" and len(args) >= 4:
+            if await has_item(uid, cid, args[2].lower()):
+                try: await add_market(uid, cid, args[2].lower(), int(args[3])); await message.reply("✅")
+                except: pass
+            return
+        if len(args) >= 2 and args[1] == "купить" and len(args) >= 3:
+            try: await message.reply(await buy_market(uid, cid, int(args[2])))
+            except: pass
+            return
+        listings = await list_market(cid)
+        if not listings: await message.reply("📭 Пусто!"); return
+        txt = "🏪 **Рынок:**\n\n"
+        for l in listings[:15]: txt += f"#{l[0]} | {l[2]} | 💰{l[3]} | {await get_name(l[1])}\n"
+        await message.reply(txt, parse_mode=ParseMode.MARKDOWN); return
+
+    if tl.startswith("удалить") and ulvl >= 5 and message.reply_to_message:
+        try: await message.reply_to_message.delete(); await message.delete()
+        except: pass
+        return
+
+    if tl.startswith("бан") and ulvl >= 5:
+        target = await get_target_user(message)
+        if target:
+            try: await bot.ban_chat_member(cid, target); await message.reply(f"🚫 Бан!")
+            except: pass
+        return
+
+    if tl.startswith("разбан") and ulvl >= 5:
+        target = await get_target_user(message)
+        if target:
+            try: await bot.unban_chat_member(cid, target); await message.reply("✅")
+            except: pass
+        return
+
+    if tl.startswith("мут") and ulvl >= 5:
+        target = await get_target_user(message)
+        if target:
+            mins = 60
+            if len(text.split()) > 1 and text.split()[-1].endswith("м"):
+                try: mins = int(text.split()[-1][:-1])
+                except: pass
+            try: await bot.restrict_chat_member(cid, target, ChatPermissions(can_send_messages=False), until_date=datetime.now()+timedelta(minutes=mins))
+            except: pass
+        return
+
+    if tl.startswith("варн") and ulvl >= 5:
+        target = await get_target_user(message); reason = text[4:].strip() or "Нарушение"
+        if target: cnt = await add_warn(target, cid, uid, reason); await message.reply(f"⚠️ Варн {cnt}/3: {await get_name(target)} — {reason}")
+        return
+
+    if tl.startswith("варны"):
+        target = await get_target_user(message) or uid
+        warns = await get_warns(target, cid)
+        if not warns: await message.reply("✅ Нет варнов!")
+        else:
+            txt = f"⚠️ **Варны {await get_name(target)}:**\n\n"
+            for reason, by, date in warns: txt += f"• {reason} ({date[:10]})\n"
+            await message.reply(txt, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if tl == "стата":
+        conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+        c.execute("SELECT user_id, count FROM message_counts WHERE chat_id=? ORDER BY count DESC LIMIT 10", (cid,))
+        top = c.fetchall()
+        c.execute("SELECT SUM(count) FROM message_counts WHERE chat_id=?", (cid,))
+        total = c.fetchone()[0] or 0; conn.close()
+        txt = f"📊 **Статистика чата**\n💬 Всего: **{total}**\n\n"
+        if top:
+            txt += "👄 **Топ болтунов:**\n"
+            for i, (u, cnt) in enumerate(top, 1): txt += f"{i}. {await get_name(u)} — {cnt}\n"
+        await message.reply(txt, parse_mode=ParseMode.MARKDOWN); return
+
+    if tl.startswith("антиспам") and ulvl >= 10:
+        st = 1 if len(text.split()) == 1 or text.split()[1] in ["вкл","on"] else 0
+        conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO settings(chat_id,anti_spam) VALUES(?,?)", (cid, st)); conn.commit(); conn.close()
+        await message.reply(f"🛡️ {'✅' if st else '❌'}"); return
+
+    if tl.startswith("антиссылки") and ulvl >= 10:
+        st = 1 if len(text.split()) == 1 or text.split()[1] in ["вкл","on"] else 0
+        conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO settings(chat_id,anti_links) VALUES(?,?)", (cid, st)); conn.commit(); conn.close()
+        await message.reply(f"🔗 {'✅' if st else '❌'}"); return
+
+    if ulvl >= 1:
+        if tl == "время": await message.reply(get_time_response(""), parse_mode=ParseMode.MARKDOWN); return
+        if tl == "дата": await message.reply(f"📅 {datetime.now().strftime('%d.%m.%Y')}"); return
+        if tl.startswith("погода"):
+            city = tl[6:].strip()
+            if city.startswith("в "): city = city[2:]
+            await message.reply(await get_weather(city or "Москва"), parse_mode=ParseMode.MARKDOWN); return
+
+    if tl == "баланс":
+        coins = await get_coins(uid, cid); bank = await get_bank_balance(uid, cid)
+        await message.reply(f"💰 Монет: **{coins}**\n🏦 Банк: **{bank}** (10%/час)\n⭐ Уровень: {ulvl}", parse_mode=ParseMode.MARKDOWN); return
+
+    if tl in ["бонус","ежедневно"]:
+        if not await can_do(uid, cid, "last_daily", 86400): await message.reply("⏳ Уже!"); return
+        await add_coins(uid, cid, 100); await set_cooldown(uid, cid, "last_daily"); await message.reply("🎁 +100!"); return
+
+    if tl.startswith("перевод "):
+        args = text.split()
+        if len(args) >= 3 and args[2].isdigit():
+            amt = int(args[2])
+            if await get_coins(uid, cid) >= amt:
+                try:
+                    m = await message.chat.get_member(args[1].replace("@",""))
+                    if m.user.id != uid: await remove_coins(uid, cid, amt); await add_coins(m.user.id, cid, amt)
+                except: pass
+        return
+
+    if tl == "ограбить":
+        if not await can_do(uid, cid, "last_rob", 3600): return
+        try:
+            members = []
+            async for m in bot.get_chat_members(cid, limit=50):
+                if not m.user.is_bot and m.user.id != uid: members.append(m.user.id)
+            if not members: return
+            vid = random.choice(members); vc = await get_coins(vid, cid)
+            if vc < 10: await set_cooldown(uid, cid, "last_rob"); return
+            buffs = await get_item_buffs(uid, cid); vb = await get_item_buffs(vid, cid)
+            chance = max(10, min(90, 40+buffs["rob_bonus"]-vb["protect_chance"]))
+            if random.randint(1,100) <= chance:
+                loot = random.randint(10, min(100, vc)); await remove_coins(vid, cid, loot); await add_coins(uid, cid, loot)
+                await message.reply(f"🤑 +{loot}!")
+            else: fine = random.randint(20,80); await remove_coins(uid, cid, fine); await message.reply(f"🚔 -{fine}!")
+            await set_cooldown(uid, cid, "last_rob")
+        except: pass
+        return
+
+    if tl == "ограбить банк":
+        if not await can_do(uid, cid, "last_bank_rob", 21600): return
+        if random.randint(1,100) <= 30+(await get_item_buffs(uid, cid))["rob_bonus"]:
+            loot = random.randint(100,500); await add_coins(uid, cid, loot); await message.reply(f"💰 +{loot}!")
+        else: fine = random.randint(50,200); await remove_coins(uid, cid, fine); await message.reply(f"🚔 -{fine}!")
+        await set_cooldown(uid, cid, "last_bank_rob"); return
+
+    if tl == "магазин":
+        txt = "🛒 **Магазин:**\n\n🎣 удочка 50\n📦 кейс 100\n🐕 питомец 500\n\n**Бафы:**\n"
+        for k,d in SHOP_BUFFS.items(): txt += f"{d['name']} — {d['desc']} | 💰{d['price']}\n"
+        await message.reply(txt, parse_mode=ParseMode.MARKDOWN); return
+
+    if tl.startswith("купить "):
+        item = tl[6:].strip()
+        prices = {"удочка":50,"каска":50,"броник":200,"кейс":100,"питомец":500}
+        if item in SHOP_BUFFS:
+            d = SHOP_BUFFS[item]
+            if await get_coins(uid, cid) >= d["price"]:
+                await remove_coins(uid, cid, d["price"])
+                conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO active_buffs VALUES(?,?,?,?,?)", (uid, cid, item, d["uses"], None)); conn.commit(); conn.close()
+        elif item in prices and await get_coins(uid, cid) >= prices[item]:
+            await remove_coins(uid, cid, prices[item])
+            if item == "кейс": await add_item(uid, cid, random.choice(list(RARE_ITEMS.keys())))
+            elif item == "питомец":
+                await message.reply("🐕 Имя:")
+                try:
+                    resp = await bot.wait_for("message", timeout=30, check=lambda m: m.chat.id==cid and m.from_user.id==uid)
+                    await adopt_pet(uid, cid, resp.text.strip())
+                except asyncio.TimeoutError: await add_coins(uid, cid, 500)
+            else: await add_item(uid, cid, item)
+        return
+
+    if tl == "инвентарь":
+        items = await get_inventory(uid, cid)
+        if not items: await message.reply("🎒 Пусто!"); return
+        txt = "🎒 **Инвентарь:**\n\n"
+        for name, qty in items: txt += f"• {RARE_ITEMS.get(name,{}).get('name',name)} x{qty}\n"
+        await message.reply(txt, parse_mode=ParseMode.MARKDOWN); return
+
+    if tl.startswith("положить "):
+        args = text.split()
+        if len(args) == 2 and args[1].isdigit() and await get_coins(uid, cid) >= int(args[1]):
+            await deposit_bank(uid, cid, int(args[1])); await message.reply(f"🏦 +{args[1]}!")
+        return
+
+    if tl.startswith("снять "):
+        args = text.split()
+        if len(args) == 2 and args[1].isdigit() and await withdraw_bank(uid, cid, int(args[1])):
+            await message.reply(f"🏦 -{args[1]}!")
+        return
+
+    if tl == "список работ":
+        msg = "💼 **Работы:**\n\n"
+        for job, data in JOBS.items(): msg += f"{data['emoji']} **{job.capitalize()}**\n💰 {data['min']}-{data['max']}\n\n"
+        await message.reply(msg, parse_mode=ParseMode.MARKDOWN); return
+
+    if tl.startswith("устроиться "):
+        job = tl[11:].strip()
+        for j in JOBS:
+            if job == j or job in j: await set_job(uid, cid, j); await message.reply(f"✅ **{j.capitalize()}**!"); break
+        return
+
+    if tl == "работа":
+        buffs = await get_item_buffs(uid, cid)
+        cd = max(60, 300-buffs["cooldown_reduce"])
+        if not await can_do(uid, cid, "last_work", cd): await message.reply(f"⏳ {cd//60} мин!"); return
+        job = await get_job(uid, cid)
+        if not job: await message.reply("❌ Безработный!"); return
+        data = JOBS[job]; mx = data["max"]
+        for iname, qty in (await get_inventory(uid, cid)):
+            if iname in RARE_ITEMS and RARE_ITEMS[iname].get("buff_job") == job: mx *= RARE_ITEMS[iname].get("buff_x",1)
+        salary = mx if await pet_work_bonus(uid, cid) else random.randint(data["min"], mx)
+        if buffs["bonus_chance"] > 0 and random.randint(1,100) <= buffs["bonus_chance"]: salary += buffs["bonus_amount"]
+        businesses = await get_all_businesses(uid, cid)
+        if businesses: salary += len(businesses)*2
+        salary += buffs["passive_income"]
+        await add_coins(uid, cid, salary); await set_cooldown(uid, cid, "last_work")
+        await message.reply(f"{data['emoji']} **{job.capitalize()}**: +{salary}!"); return
+
+    if tl == "бизнесы":
+        msg = "🏪 **Бизнесы:**\n\n"
+        for name, data in BUSINESSES.items(): msg += f"{data['emoji']} **{name.capitalize()}**\n💰 {data['price']}\n💵 {data['income']}/час\n\n"
+        await message.reply(msg, parse_mode=ParseMode.MARKDOWN); return
+
+    if tl.startswith("купить бизнес "):
+        name = tl[13:].strip()
+        if name in BUSINESSES and not await get_business(uid, cid, name):
+            data = BUSINESSES[name]; buffs = await get_item_buffs(uid, cid)
+            price = int(data["price"]*(1-buffs["business_discount"]/100))
+            if await get_coins(uid, cid) >= price: await remove_coins(uid, cid, price); await create_business(uid, cid, name)
+        return
+
+    if tl == "собрать бизнес":
+        businesses = await get_all_businesses(uid, cid)
+        if businesses:
+            total = sum([await collect_business_income(uid, cid, name) for name,_,_,_ in businesses])
+            if total > 0: await add_coins(uid, cid, total); await message.reply(f"💰 +{total}!")
+        return
+
+    if tl == "питомец":
+        pet = await get_pet(uid, cid)
+        if pet: await message.reply(f"🐕 **{pet[0]}** ({pet[1]})\n❤️ {pet[2]}/100", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if tl == "покормить питомца":
+        if await get_pet(uid, cid): await feed_pet(uid, cid); await message.reply("🍖 +20❤️!")
+        return
+
+    if tl in ["+реп","-реп"] and message.reply_to_message:
+        tid = message.reply_to_message.from_user.id
+        if tid != uid and await can_do(uid, cid, "last_rep", 300):
+            await add_rep(tid, cid, 1 if tl=="+реп" else -1); await set_cooldown(uid, cid, "last_rep")
+        return
+
+    if tl == "моя реп": await message.reply(f"⭐ {await get_rep(uid, cid)}"); return
+
+    if tl == "брак" and message.reply_to_message:
+        tid = message.reply_to_message.from_user.id
+        if tid != uid and not await get_marriage(uid, cid):
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💍 ДА", callback_data=f"myes_{cid}_{tid}_{uid}")],
+                [InlineKeyboardButton(text="❌ НЕТ", callback_data=f"mno_{cid}_{tid}_{uid}")]
+            ])
+            await message.reply(f"💍 {await get_name(uid)} → {await get_name(tid)}", reply_markup=kb)
+        return
+
+    if tl == "развестись":
+        spouse = await get_marriage(uid, cid)
+        if spouse: await remove_marriage(uid, cid); await remove_marriage(spouse, cid); await message.reply("💔")
+        return
+
+    if tl.startswith("создать клан "):
+        name = tl[12:].strip()
+        conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+        if not c.execute("SELECT id FROM clans WHERE chat_id=? AND name=?", (cid, name)).fetchone():
+            c.execute("INSERT INTO clans(chat_id,name,owner_id,members) VALUES(?,?,?,?)", (cid, name, uid, str(uid)))
+            conn.commit()
+        conn.close(); return
+
+    if tl.startswith("вступить в клан "):
+        name = tl[15:].strip()
+        conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+        c.execute("SELECT id,members FROM clans WHERE chat_id=? AND LOWER(name)=LOWER(?)", (cid, name))
+        r = c.fetchone()
+        if r and str(uid) not in r[1].split(","):
+            c.execute("UPDATE clans SET members=? WHERE id=?", (r[1]+","+str(uid), r[0]))
+            conn.commit()
+        conn.close(); return
+
+    if tl == "мой клан":
+        clan = await get_user_clan(uid, cid)
+        if clan: await message.reply(f"🏰 **{clan[1]}**\n👑 {await get_name(clan[2])}\n💰 {clan[4]}", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if tl == "кланы":
+        conn = sqlite3.connect("fable_bot.db"); c = conn.cursor()
+        c.execute("SELECT name,owner_id,members,treasury FROM clans WHERE chat_id=?", (cid,))
+        rows = c.fetchall(); conn.close()
+        if rows:
+            txt = "🏰 **Кланы:**\n\n"
+            for name, oid, mems, treas in rows: txt += f"**{name}** | 👑 {await get_name(oid)} | 💰 {treas}\n"
+            await message.reply(txt, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if tl.startswith("кубы") and message.reply_to_message:
+        oid = message.reply_to_message.from_user.id
+        if uid != oid:
+            dc = min(max(int(text.split()[1]) if len(text.split())>1 and text.split()[1].isdigit() else 1, 1), 3)
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ ДА", callback_data=f"cyes_{cid}_{uid}_{oid}_{dc}")],
+                [InlineKeyboardButton(text="❌ НЕТ", callback_data=f"cno_{cid}_{uid}_{oid}")]
+            ])
+            await message.reply(f"🎲 {await get_name(uid)} vs {await get_name(oid)}!", reply_markup=kb)
+        return
+
+    if tl.startswith("деп "):
+        args = text.split()
+        if len(args) == 2 and args[1].isdigit():
+            bet = int(args[1])
+            if bet > 0 and await get_coins(uid, cid) >= bet:
+                roll = random.randint(1,6); target = random.randint(1,6)
+                await message.reply(f"🎲 Ставка **{bet}**!\n🎯 {target}..."); await asyncio.sleep(2)
+                if roll == target: await add_coins(uid, cid, bet*random.choice([2,3,5])); await message.reply(f"🎉 +{bet*2}!")
+                else: await remove_coins(uid, cid, bet); await message.reply(f"😭 -{bet}")
+        return
+
+    if tl == "команды":
+        await message.reply(
+            f"📋 **{BOT_NAME}**\n\n"
+            "💬 `Fable привет` — общение\n"
+            "🎨 `Fable сгенерируй ...` — картинки\n"
+            "🔍 `Fable найди ...` — поиск\n"
+            "🌤 `Fable погода` — погода\n"
+            "🕐 `Fable сколько время` — время\n"
+            "🌐 `Fable переведи` — перевод\n"
+            "🎭 `режим sarcasm/philosopher/poet` — режим\n\n"
+            "💰 **Экономика:** `баланс` `бонус` `работа` `перевод` `ограбить` `магазин` `инвентарь`\n"
+            "🏦 **Банк:** `положить` `снять` (10%/час)\n"
+            "🏪 **Рынок:** `рынок` `рынок продать` `рынок купить`\n"
+            "🎫 **Промо:** `промо КОД`\n"
+            "🤜 **РП:** `ударить` `обнять` `убить` и др.\n"
+            "🎲 **Игры:** `кубы` `деп`\n"
+            "🏰 **Кланы:** `создать клан` `кланы` `мой клан`\n\n"
+            "🛡️ **Модер (5+):** `удалить` `бан` `мут` `варн`\n"
+            "👑 **Админ (10):** `антиспам` `антиссылки`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+async def get_target_user(message: types.Message):
+    if message.reply_to_message: return message.reply_to_message.from_user.id
+    args = message.text.split()
+    if len(args) > 1:
+        try: return (await message.chat.get_member(args[1].replace("@",""))).user.id
+        except: return None
+    return None
+
+# Колбэки
+@dp.callback_query(lambda c: c.data.startswith("myes_"))
+async def marry_yes(cb: types.CallbackQuery):
+    _, cid, tid, pid = cb.data.split("_"); cid, tid, pid = int(cid), int(tid), int(pid)
+    if cb.from_user.id != tid: return
+    await set_marriage(tid, cid, pid); await set_marriage(pid, cid, tid)
+    await cb.message.edit_text(f"💍 {await get_name(pid)} + {await get_name(tid)}!")
+
+@dp.callback_query(lambda c: c.data.startswith("mno_"))
+async def marry_no(cb: types.CallbackQuery): await cb.message.edit_text("❌ Отказ!")
+
+@dp.callback_query(lambda c: c.data.startswith("cyes_"))
+async def cube_yes(cb: types.CallbackQuery):
+    _, cid, cid2, oid, dc = cb.data.split("_"); cid, cid2, oid, dc = int(cid), int(cid2), int(oid), int(dc)
+    if cb.from_user.id != oid: return
+    await cb.message.delete()
+    r1 = [random.randint(1,6) for _ in range(dc)]; t1 = sum(r1)
+    await asyncio.sleep(1); await bot.send_message(cid, f"🎲 {await get_name(cid2)}: {', '.join(map(str,r1))} = **{t1}**")
+    r2 = [random.randint(1,6) for _ in range(dc)]; t2 = sum(r2)
+    await asyncio.sleep(1); await bot.send_message(cid, f"🎲 {await get_name(oid)}: {', '.join(map(str,r2))} = **{t2}**")
+    if t1 > t2: await add_coins(cid2, cid, 50); await bot.send_message(cid, f"🏆 {await get_name(cid2)}!")
+    elif t2 > t1: await add_coins(oid, cid, 50); await bot.send_message(cid, f"🏆 {await get_name(oid)}!")
+
+@dp.callback_query(lambda c: c.data.startswith("cno_"))
+async def cube_no(cb: types.CallbackQuery): await cb.message.edit_text("❌ Отказ!")
+
+async def main():
+    init_db()
+    asyncio.create_task(add_bank_interest())
+    print(f"✅ {BOT_NAME} запущен!")
+    print(f"🧠 AI с характером 22-летнего парня")
+    print(f"🎮 Любит игры, аниме, рэп, качалку")
+    print(f"💾 База: fable_bot.db")
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
