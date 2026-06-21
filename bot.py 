@@ -1,0 +1,739 @@
+import asyncio, random, sqlite3, os, re, html, json, hashlib, urllib.parse, aiohttp
+from datetime import datetime, timedelta, timezone
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ChatPermissions, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
+from dotenv import load_dotenv
+from bs4 import BeautifulSoup
+import pytz
+
+load_dotenv()
+TOKEN = os.getenv('BOT_TOKEN')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+POLLINATIONS_API_KEY = os.getenv('POLLINATIONS_API_KEY')
+BOT_NAME = "Fable"
+BOT_USERNAME = os.getenv('BOT_USERNAME') or 'FableGame_bot'
+
+if not TOKEN: print("❌ BOT_TOKEN не задан!"); exit(1)
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+YOUR_ID = 8039111975
+
+TIMEZONES = {
+    "гринвич":"Etc/GMT","gmt":"Etc/GMT","лондон":"Europe/London","london":"Europe/London",
+    "берлин":"Europe/Berlin","париж":"Europe/Paris","рим":"Europe/Rome","мадрид":"Europe/Madrid",
+    "варшава":"Europe/Warsaw","амстердам":"Europe/Amsterdam","вена":"Europe/Vienna",
+    "прага":"Europe/Prague","будапешт":"Europe/Budapest","цюрих":"Europe/Zurich",
+    "осло":"Europe/Oslo","стокгольм":"Europe/Stockholm","хельсинки":"Europe/Helsinki",
+    "копенгаген":"Europe/Copenhagen","брюссель":"Europe/Brussels","лиссабон":"Europe/Lisbon",
+    "дублин":"Europe/Dublin","афины":"Europe/Athens","софия":"Europe/Sofia",
+    "бухарест":"Europe/Bucharest","белград":"Europe/Belgrade","загреб":"Europe/Zagreb",
+    "киев":"Europe/Kiev","рейкьявик":"Atlantic/Reykjavik",
+    "мск":"Europe/Moscow","москва":"Europe/Moscow","питер":"Europe/Moscow",
+    "санкт-петербург":"Europe/Moscow","минск":"Europe/Minsk",
+    "казань":"Europe/Moscow","сочи":"Europe/Moscow","краснодар":"Europe/Moscow",
+    "калининград":"Europe/Kaliningrad","самара":"Europe/Samara",
+    "екатеринбург":"Asia/Yekaterinburg","уфа":"Asia/Yekaterinburg",
+    "тюмень":"Asia/Yekaterinburg","челябинск":"Asia/Yekaterinburg",
+    "омск":"Asia/Omsk","новосибирск":"Asia/Novosibirsk",
+    "красноярск":"Asia/Krasnoyarsk","иркутск":"Asia/Irkutsk",
+    "якутск":"Asia/Yakutsk","владивосток":"Asia/Vladivostok",
+    "хабаровск":"Asia/Vladivostok","магадан":"Asia/Magadan","камчатка":"Asia/Kamchatka",
+    "ташкент":"Asia/Tashkent","алматы":"Asia/Almaty","астана":"Asia/Almaty",
+    "бишкек":"Asia/Bishkek","душанбе":"Asia/Dushanbe","ашхабад":"Asia/Ashgabat",
+    "дубай":"Asia/Dubai","абу-даби":"Asia/Dubai","доха":"Asia/Qatar",
+    "тбилиси":"Asia/Tbilisi","ереван":"Asia/Yerevan","баку":"Asia/Baku",
+    "стамбул":"Europe/Istanbul","анкара":"Europe/Istanbul",
+    "токио":"Asia/Tokyo","сеул":"Asia/Seoul","пекин":"Asia/Shanghai",
+    "шанхай":"Asia/Shanghai","гонконг":"Asia/Hong_Kong","сингапур":"Asia/Singapore",
+    "куала-лумпур":"Asia/Kuala_Lumpur","джакарта":"Asia/Jakarta","банкгок":"Asia/Bangkok",
+    "дели":"Asia/Kolkata","мумбаи":"Asia/Kolkata","гоа":"Asia/Kolkata",
+    "каир":"Africa/Cairo","лагос":"Africa/Lagos","найроби":"Africa/Nairobi",
+    "кептаун":"Africa/Johannesburg","йоханнесбург":"Africa/Johannesburg",
+    "нью-йорк":"America/New_York","чикаго":"America/Chicago",
+    "лос-анджелес":"America/Los_Angeles","сан-франциско":"America/Los_Angeles",
+    "лас-вегас":"America/Los_Angeles","сиэтл":"America/Los_Angeles",
+    "дэнвер":"America/Denver","финикс":"America/Phoenix",
+    "майами":"America/New_York","вашингтон":"America/New_York","бостон":"America/New_York",
+    "торонто":"America/Toronto","ванкувер":"America/Vancouver","монреаль":"America/Toronto",
+    "мехико":"America/Mexico_City","канкун":"America/Cancun",
+    "буэнос-айрес":"America/Argentina/Buenos_Aires","сан-паулу":"America/Sao_Paulo",
+    "рио":"America/Sao_Paulo","лима":"America/Lima","сантьяго":"America/Santiago",
+    "сидней":"Australia/Sydney","мельбурн":"Australia/Melbourne",
+    "канберра":"Australia/Sydney","бризбен":"Australia/Brisbane","перт":"Australia/Perth",
+    "окленд":"Pacific/Auckland","веллингтон":"Pacific/Auckland",
+    "фиджи":"Pacific/Fiji","гавайи":"Pacific/Honolulu",
+}
+
+RARE_ITEMS = {
+    "золотая_удочка":{"name":"🎣 Золотая удочка","desc":"x2 к доходу рыбака","buff_job":"рыбак","buff_x":2,"rarity":"🟡 Легендарный"},
+    "сеть":{"name":"🌊 Сеть","desc":"x3 к доходу рыбака","buff_job":"рыбак","buff_x":3,"rarity":"🟣 Мифический"},
+    "алмазная_кирка":{"name":"💎 Алмазная кирка","desc":"x3 к доходу шахтёра","buff_job":"шахтёр","buff_x":3,"rarity":"🟡 Легендарный"},
+    "титановая_кирка":{"name":"⛏️ Титановая кирка","desc":"x5 к доходу шахтёра","buff_job":"шахтёр","buff_x":5,"rarity":"🟣 Мифический"},
+    "фонарь":{"name":"🔦 Фонарь","desc":"+30% бонус шахтёру","buff_job":"шахтёр","bonus_chance":30,"bonus_amount":200,"rarity":"🟣 Эпический"},
+    "квантовый_ноутбук":{"name":"💻 Квантовый ноутбук","desc":"x2 программисту","buff_job":"программист","buff_x":2,"rarity":"🟡 Легендарный"},
+    "нейрочип":{"name":"🧠 Нейрочип","desc":"x3 программисту","buff_job":"программист","buff_x":3,"rarity":"🟣 Мифический"},
+    "бесконечный_кофе":{"name":"☕ Бесконечный кофе","desc":"-2 мин кулдауна","buff_job":"программист","cooldown_reduce":120,"rarity":"🟣 Эпический"},
+    "золотые_семена":{"name":"🌱 Золотые семена","desc":"x2 фермеру","buff_job":"фермер","buff_x":2,"rarity":"🟡 Легендарный"},
+    "алмазный_серп":{"name":"🌾 Алмазный серп","desc":"x4 фермеру","buff_job":"фермер","buff_x":4,"rarity":"🟣 Мифический"},
+    "золотой_улей":{"name":"🐝 Золотой улей","desc":"+50 пассивного дохода","buff_job":"фермер","passive_income":50,"rarity":"🟣 Эпический"},
+    "asic_майнер":{"name":"⚡ ASIC-майнер","desc":"x2 майнеру","buff_job":"майнер","buff_x":2,"rarity":"🟡 Легендарный"},
+    "квантовый_кошелёк":{"name":"🔮 Квантовый кошелёк","desc":"x3 майнеру","buff_job":"майнер","buff_x":3,"rarity":"🟣 Мифический"},
+    "вихревой_кулер":{"name":"🌀 Вихревой кулер","desc":"-3 мин кулдауна","buff_job":"майнер","cooldown_reduce":180,"rarity":"🟣 Эпический"},
+    "щит":{"name":"🛡️ Щит","desc":"Защита 60%","protect_chance":60,"rarity":"🟡 Легендарный"},
+    "меч":{"name":"⚔️ Меч","desc":"+10% ограбление","rob_bonus":10,"rarity":"🟣 Эпический"},
+    "плащ_невидимка":{"name":"👻 Плащ","desc":"+20% ограбление","rob_bonus":20,"rarity":"🟣 Мифический"},
+    "золотая_карта":{"name":"🏦 Золотая карта","desc":"+10% к банку","bank_bonus":10,"rarity":"🟡 Легендарный"},
+    "кристалл":{"name":"📈 Кристалл","desc":"Бизнес x2","business_x":2,"rarity":"🟣 Мифический"},
+    "цилиндр_монополиста":{"name":"🎩 Цилиндр","desc":"-50% цена","business_discount":50,"rarity":"🟣 Эпический"},
+    "кошелёк_мидаса":{"name":"💰 Кошелёк Мидаса","desc":"+5 монет/сообщение","msg_bonus":5,"rarity":"🟡 Легендарный"},
+    "энергетик":{"name":"⚡ Энергетик","desc":"Мгновенный кулдаун","instant_cooldown":True,"consumable":True,"rarity":"🟣 Эпический"},
+    "часы_флэша":{"name":"🕐 Часы Флэша","desc":"Кулдауны x2","cooldown_boost":2,"rarity":"🟣 Мифический"},
+    "петля_времени":{"name":"🔄 Петля времени","desc":"Сброс кулдаунов","reset_all":True,"consumable":True,"rarity":"🟡 Легендарный"},
+    "чёрный_ящик":{"name":"🎲 Чёрный ящик","desc":"Случайный предмет","random_rare":True,"consumable":True,"rarity":"🟡 Легендарный"},
+}
+
+SHOP_BUFFS = {
+    "ускорение1":{"name":"⚡ Ускорение I","desc":"-1 мин","price":100,"uses":10,"cooldown_reduce":60},
+    "ускорение2":{"name":"⚡⚡ Ускорение II","desc":"-2 мин","price":250,"uses":5,"cooldown_reduce":120},
+    "мотивация":{"name":"💪 Мотивация","desc":"+50% доход","price":300,"uses":1,"income_boost":50},
+    "удача":{"name":"🍀 Удача","desc":"Шанс x5","price":500,"uses":3,"luck_chance":20,"luck_x":5},
+    "скрытность":{"name":"🥷 Скрытность","desc":"+25% ограбление","price":200,"uses":1,"rob_bonus":25},
+    "побег":{"name":"🏃 Побег","desc":"Нет штрафа","price":400,"uses":1,"no_rob_fine":True},
+}
+
+JOBS = {
+    "шахтёр":{"min":15,"max":30,"emoji":"⛏️","desc":"Добывает руду в шахте"},
+    "рыбак":{"min":10,"max":25,"emoji":"🎣","desc":"Ловит рыбу в море"},
+    "программист":{"min":20,"max":40,"emoji":"💻","desc":"Пишет код и создаёт приложения"},
+    "фермер":{"min":10,"max":20,"emoji":"🌾","desc":"Выращивает овощи и фрукты"},
+    "майнер":{"min":25,"max":50,"emoji":"⛏️","desc":"Добывает криптовалюту"},
+    "полицейский":{"min":15,"max":35,"emoji":"👮","desc":"Охраняет порядок в городе"},
+    "врач":{"min":20,"max":45,"emoji":"🏥","desc":"Лечит людей и спасает жизни"},
+    "учитель":{"min":12,"max":28,"emoji":"📚","desc":"Учит детей в школе"},
+    "строитель":{"min":18,"max":38,"emoji":"🏗️","desc":"Строит дома и дороги"},
+    "водитель":{"min":14,"max":30,"emoji":"🚕","desc":"Возит людей и грузы"},
+    "повар":{"min":12,"max":25,"emoji":"🍳","desc":"Готовит вкусную еду"},
+    "дизайнер":{"min":18,"max":35,"emoji":"🎨","desc":"Создаёт дизайн и искусство"},
+    "музыкант":{"min":15,"max":40,"emoji":"🎵","desc":"Играет музыку и пишет песни"},
+    "атлет":{"min":16,"max":35,"emoji":"🏋️","desc":"Занимается спортом и соревнуется"},
+    "фотограф":{"min":14,"max":30,"emoji":"📸","desc":"Снимает красивые фото"},
+}
+
+BUSINESSES = {
+    "кафе":{"price":500,"emoji":"☕","income":20,"upgrade_price":300,"upgrade_income":10,"max_level":10,"desc":"Продаёт кофе и булочки"},
+    "магазин":{"price":1000,"emoji":"🏪","income":35,"upgrade_price":500,"upgrade_income":15,"max_level":10,"desc":"Продаёт продукты и товары"},
+    "ферма":{"price":800,"emoji":"🌾","income":25,"upgrade_price":400,"upgrade_income":12,"max_level":10,"desc":"Выращивает овощи и злаки"},
+    "шахта":{"price":1200,"emoji":"⛏️","income":40,"upgrade_price":600,"upgrade_income":18,"max_level":10,"desc":"Добывает полезные ископаемые"},
+    "ресторан":{"price":1500,"emoji":"🍽️","income":50,"upgrade_price":800,"upgrade_income":20,"max_level":10,"desc":"Готовит изысканные блюда"},
+    "отель":{"price":2000,"emoji":"🏨","income":60,"upgrade_price":1000,"upgrade_income":25,"max_level":10,"desc":"Принимает гостей и туристов"},
+    "криптоферма":{"price":2500,"emoji":"💎","income":80,"upgrade_price":1200,"upgrade_income":30,"max_level":10,"desc":"Майнит криптовалюту"},
+    "студия":{"price":1800,"emoji":"🎬","income":55,"upgrade_price":900,"upgrade_income":22,"max_level":10,"desc":"Снимает фильмы и клипы"},
+    "завод":{"price":3000,"emoji":"🏭","income":100,"upgrade_price":1500,"upgrade_income":35,"max_level":10,"desc":"Производит товары"},
+    "клуб":{"price":3500,"emoji":"🎉","income":120,"upgrade_price":1800,"upgrade_income":40,"max_level":10,"desc":"Ночной клуб с вечеринками"},
+}
+
+FACTUAL_MARKERS = ("кто","что","где","когда","почему","зачем","как","сколько","какой","какая","какие")
+CASUAL_CHAT_MARKERS = ("привет","здравствуй","как дела","спасибо","пока","как ты","что делаешь")
+HTTP_HEADERS = {"User-Agent":f"{BOT_NAME}/1.0","Accept":"application/json, text/plain, */*"}
+USER_AGENTS = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36','Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0 Safari/537.36']
+
+def normalize_text(text:str)->str: return re.sub(r"\s+"," ",(text or "").strip())
+def get_time_in_city(city:str)->str:
+    try:
+        cl=city.lower().strip()
+        if cl in TIMEZONES: return datetime.now(pytz.timezone(TIMEZONES[cl])).strftime('%H:%M')
+        for tz in pytz.all_timezones:
+            if cl in tz.lower(): return datetime.now(pytz.timezone(tz)).strftime('%H:%M')
+        return None
+    except: return None
+
+def get_time_response(text:str)->str:
+    tl=text.lower()
+    for pfx in["время в ","время по ","часов в ","который час в "]:
+        if pfx in tl:
+            city=tl.split(pfx,1)[1].strip()
+            if city and len(city)>1:
+                t=get_time_in_city(city)
+                if t: return f"🕐 В **{city.title()}**: {t}"
+    msk=get_time_in_city("москва")
+    return f"🕐 По МСК: **{msk}**"if msk else"❌ Ошибка"
+
+async def get_weather(city:str="Москва")->str:
+    try:
+        url=f"https://wttr.in/{urllib.parse.quote(city)}?format=%C+%t+%w&lang=ru"
+        async with aiohttp.ClientSession()as s:
+            async with s.get(url,timeout=10)as r:
+                if r.status==200:
+                    t=(await r.text()).strip().split()
+                    if len(t)>=2: return f"🌤 **{city.title()}**\n🌡 {t[1]}\n💨 {t[2]if len(t)>2 else'Н/Д'}"
+                    return f"🌤 **{city.title()}**: {' '.join(t)}"
+    except: pass
+    return"❌ Не удалось"
+
+def analyze_message(prompt:str)->str:
+    pl=prompt.lower().strip()
+    greetings=["привет","здравствуй","здарова","доброе утро","добрый вечер","добрый день","прив","hello","hi","хелло","хай","салют","ку","здоров","здрасте","приветствую","йоу","вечер в хату"]
+    if any(pl.startswith(g)for g in greetings)or pl in greetings: return'greeting'
+    if any(w in pl for w in["время","часов","который час"]): return'time'
+    if any(w in pl for w in["погода","weather"]): return'weather'
+    cmds=["баланс","бонус","работа","профиль","кто я","магазин","инвентарь","ограбить","кубы","деп","команды","рынок","промо","брак","кланы","варн","стата","помощь"]
+    if any(pl==c or pl.startswith(c+" ")for c in cmds): return'command'
+    qw=["кто","что","где","когда","почему","зачем","как","сколько","какой","какая","какие","расскажи","объясни","найди"]
+    if"?"in pl or any(pl.startswith(w)for w in qw): return'question'
+    insults=["бля","блять","пизда","пиздец","хуй","хуя","хуйня","хуета","хуесос","ебать","ебаный","ебан","заебал","уебан","нахуй","сука","дурак","тупой","идиот","деб","дебил","даун","слабоумный","кретин","придурок","мудак","козел","гандон","пидор","лох","чмо","мразь","тварь","говно","дерьмо","ублюдок","сволочь","падла","гнида","шлюха","кал","урод","недоумок","отморозок","безмозглый","ничтожество","убогий","заткнись","убейся","пошел на","иди на","отъебись","съеби","обделён","обделен","смехуятина","хуятина"]
+    if any(i in pl for i in insults): return'insult'
+    if any(w in pl for w in["хаха","ахах","лол","кек","ору","ржу","угар","ржака"]): return'emotion'
+    if len(pl.split())>3 and any(w in pl for w in["как","что","где","когда","почему"]): return'question'
+    if len(pl.split())>5: return'statement'
+    if len(pl.split())<=2: return'statement'
+    return'question'
+
+def get_local_smart_answer(prompt:str)->str:
+    pl=normalize_text(prompt).lower()
+    if"монетк"in pl: return f"🪙 {random.choice(['Орёл','Решка'])}"
+    if pl.startswith("выбери "):
+        c=[x.strip()for x in re.split(r"\s+или\s+|,",pl[7:])if x.strip()]
+        if len(c)>=2: return f"🤔 {random.choice(c)}"
+    if pl.startswith("рандом")or pl.startswith("случайное"):
+        nums=re.findall(r'\d+',pl)
+        if len(nums)>=2: return f"🎲 {random.randint(int(nums[0]),int(nums[1]))}"
+    return None
+
+def init_db():
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS users(user_id INTEGER,chat_id INTEGER,coins INTEGER DEFAULT 0,last_daily TEXT,last_work TEXT,last_rob TEXT,last_bank_rob TEXT,last_rep TEXT,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS rp_roles(user_id INTEGER,chat_id INTEGER,level INTEGER DEFAULT 1,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS settings(chat_id INTEGER PRIMARY KEY,anti_spam INTEGER DEFAULT 0,anti_links INTEGER DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS reputation(user_id INTEGER,chat_id INTEGER,rep INTEGER DEFAULT 0,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS marriages(user_id INTEGER,chat_id INTEGER,spouse_id INTEGER,date TEXT,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS clans(id INTEGER PRIMARY KEY AUTOINCREMENT,chat_id INTEGER,name TEXT,owner_id INTEGER,members TEXT,treasury INTEGER DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS inventory(user_id INTEGER,chat_id INTEGER,item_name TEXT,quantity INTEGER DEFAULT 1,PRIMARY KEY(user_id,chat_id,item_name))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bank(user_id INTEGER,chat_id INTEGER,balance INTEGER DEFAULT 0,last_interest TEXT,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS jobs(user_id INTEGER,chat_id INTEGER,job TEXT,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS pets(user_id INTEGER,chat_id INTEGER,pet_name TEXT,pet_type TEXT,happiness INTEGER DEFAULT 100,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS businesses(user_id INTEGER,chat_id INTEGER,name TEXT,level INTEGER DEFAULT 1,income INTEGER DEFAULT 0,last_collect TEXT,PRIMARY KEY(user_id,chat_id,name))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS ai_cache(question_hash TEXT PRIMARY KEY,question TEXT,answer TEXT,timestamp TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS search_cache(key TEXT PRIMARY KEY,result TEXT,timestamp TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS message_counts(user_id INTEGER,chat_id INTEGER,count INTEGER DEFAULT 0,PRIMARY KEY(user_id,chat_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS awards(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,chat_id INTEGER,award_name TEXT,date TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS warns(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,chat_id INTEGER,warned_by INTEGER,reason TEXT,date TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS promocodes(code TEXT PRIMARY KEY,creator_id INTEGER,reward_coins INTEGER DEFAULT 0,reward_item TEXT,max_uses INTEGER DEFAULT 1,used_count INTEGER DEFAULT 0,expires TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS promo_uses(id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT,user_id INTEGER,chat_id INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS market(id INTEGER PRIMARY KEY AUTOINCREMENT,seller_id INTEGER,chat_id INTEGER,item_name TEXT,price INTEGER,quantity INTEGER DEFAULT 1)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS spam_log(user_id INTEGER,chat_id INTEGER,message_count INTEGER DEFAULT 1,last_message TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS dialog_context(id INTEGER PRIMARY KEY AUTOINCREMENT,chat_id INTEGER,user_id INTEGER,role TEXT,content TEXT,timestamp TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS user_lang(user_id INTEGER PRIMARY KEY,lang TEXT DEFAULT 'ru')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bot_modes(chat_id INTEGER,mode TEXT DEFAULT 'normal')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS user_facts(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,chat_id INTEGER,fact TEXT,timestamp TEXT)""")
+    conn.commit();conn.close()
+
+# Базовые функции БД
+async def add_coins(uid,cid,amt):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO users VALUES(?,?,?)ON CONFLICT(user_id,chat_id)DO UPDATE SET coins=coins+?",(uid,cid,amt,amt));conn.commit();conn.close()
+
+async def remove_coins(uid,cid,amt):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("UPDATE users SET coins=MAX(0,coins-?)WHERE user_id=? AND chat_id=?",(amt,uid,cid));conn.commit();conn.close()
+
+async def get_coins(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT coins FROM users WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else 0
+
+async def get_name(uid):
+    try:
+        u=await bot.get_chat(uid);return f"@{u.username}"if u.username else u.first_name
+    except:return f"id{uid}"
+
+async def get_role(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT level FROM rp_roles WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else 1
+
+async def set_role(uid,cid,lvl):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO rp_roles VALUES(?,?,?)",(uid,cid,lvl));conn.commit();conn.close()
+
+async def set_job(uid,cid,job):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO jobs VALUES(?,?,?)",(uid,cid,job));conn.commit();conn.close()
+
+async def get_job(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT job FROM jobs WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else None
+
+async def add_item(uid,cid,item,qty=1):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO inventory VALUES(?,?,?,?)ON CONFLICT(user_id,chat_id,item_name)DO UPDATE SET quantity=quantity+?",(uid,cid,item,qty,qty));conn.commit();conn.close()
+
+async def get_inventory(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT item_name,quantity FROM inventory WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchall();conn.close();return r
+
+async def has_item(uid,cid,item):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT quantity FROM inventory WHERE user_id=? AND chat_id=? AND item_name=?",(uid,cid,item));r=c.fetchone();conn.close();return r[0]if r else 0
+
+async def remove_item(uid,cid,item,qty=1):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT quantity FROM inventory WHERE user_id=? AND chat_id=? AND item_name=?",(uid,cid,item));r=c.fetchone()
+    if r and r[0]>=qty:
+        nq=r[0]-qty
+        if nq<=0:c.execute("DELETE FROM inventory WHERE user_id=? AND chat_id=? AND item_name=?",(uid,cid,item))
+        else:c.execute("UPDATE inventory SET quantity=? WHERE user_id=? AND chat_id=? AND item_name=?",(nq,uid,cid,item))
+        conn.commit();conn.close();return True
+    conn.close();return False
+
+async def get_item_buffs(uid,cid):
+    items=await get_inventory(uid,cid)
+    buffs={"buff_x":1,"bonus_chance":0,"bonus_amount":0,"cooldown_reduce":0,"protect_chance":0,"rob_bonus":0,"business_x":1,"business_discount":0,"passive_income":0}
+    for iname,qty in items:
+        if iname in RARE_ITEMS:
+            d=RARE_ITEMS[iname]
+            for k in buffs:
+                if k in d:
+                    if k in["buff_x","business_x"]:buffs[k]=max(buffs[k],d[k])
+                    else:buffs[k]+=d[k]*qty
+    return buffs
+
+async def deposit_bank(uid,cid,amt):
+    await remove_coins(uid,cid,amt)
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO bank VALUES(?,?,?,?)ON CONFLICT(user_id,chat_id)DO UPDATE SET balance=balance+?,last_interest=?",(uid,cid,amt,datetime.now().isoformat(),amt,datetime.now().isoformat()));conn.commit();conn.close()
+
+async def withdraw_bank(uid,cid,amt):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT balance FROM bank WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone()
+    if r and r[0]>=amt:
+        c.execute("UPDATE bank SET balance=balance-? WHERE user_id=? AND chat_id=?",(amt,uid,cid));conn.commit();conn.close();await add_coins(uid,cid,amt);return True
+    conn.close();return False
+
+async def get_bank_balance(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT balance FROM bank WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else 0
+
+async def add_bank_interest():
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+            c.execute("SELECT user_id,chat_id,balance FROM bank WHERE balance>0")
+            for uid,cid,bal in c.fetchall():c.execute("UPDATE bank SET balance=balance+? WHERE user_id=? AND chat_id=?",(int(bal*0.1),uid,cid))
+            conn.commit();conn.close()
+        except:pass
+
+async def add_rep(uid,cid,amt):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO reputation VALUES(?,?,COALESCE((SELECT rep FROM reputation WHERE user_id=? AND chat_id=?),0)+?)",(uid,cid,uid,cid,amt));conn.commit();conn.close()
+
+async def get_rep(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT rep FROM reputation WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else 0
+
+async def get_marriage(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT spouse_id FROM marriages WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else None
+
+async def set_marriage(uid,cid,sid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO marriages VALUES(?,?,?,?)",(uid,cid,sid,datetime.now().isoformat()));conn.commit();conn.close()
+
+async def remove_marriage(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("DELETE FROM marriages WHERE user_id=? AND chat_id=?",(uid,cid));conn.commit();conn.close()
+
+async def get_all_marriages(cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT user_id,spouse_id FROM marriages WHERE chat_id=?",(cid,));r=c.fetchall();conn.close();return r
+
+async def can_do(uid,cid,action,sec):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute(f"SELECT {action} FROM users WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close()
+    if not r or not r[0]:return True
+    return(datetime.now()-datetime.fromisoformat(r[0])).total_seconds()>=sec
+
+async def set_cooldown(uid,cid,action):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute(f"UPDATE users SET {action}=? WHERE user_id=? AND chat_id=?",(datetime.now().isoformat(),uid,cid));conn.commit();conn.close()
+
+async def add_msg_count(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO message_counts VALUES(?,?,1)ON CONFLICT(user_id,chat_id)DO UPDATE SET count=count+1",(uid,cid));conn.commit();conn.close()
+
+async def get_msg_count(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT count FROM message_counts WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r[0]if r else 0
+
+async def add_warn(uid,cid,by,reason):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO warns(user_id,chat_id,warned_by,reason,date)VALUES(?,?,?,?,?)",(uid,cid,by,reason,datetime.now().isoformat()))
+    conn.commit();c.execute("SELECT COUNT(*)FROM warns WHERE user_id=? AND chat_id=?",(uid,cid));cnt=c.fetchone()[0];conn.close()
+    if cnt>=3:
+        try:await bot.ban_chat_member(cid,uid)
+        except:pass
+    return cnt
+
+async def get_warns(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT reason,warned_by,date FROM warns WHERE user_id=? AND chat_id=? ORDER BY date DESC",(uid,cid));r=c.fetchall();conn.close();return r
+
+async def get_user_lang(uid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT lang FROM user_lang WHERE user_id=?",(uid,));r=c.fetchone();conn.close();return r[0]if r else'ru'
+
+async def set_user_lang(uid,lang):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO user_lang VALUES(?,?)",(uid,lang));conn.commit();conn.close()
+
+async def get_bot_mode(cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT mode FROM bot_modes WHERE chat_id=?",(cid,));r=c.fetchone();conn.close();return r[0]if r else'normal'
+
+async def set_bot_mode(cid,mode):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO bot_modes VALUES(?,?)",(cid,mode));conn.commit();conn.close()
+
+async def save_user_fact(uid,cid,fact):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO user_facts(user_id,chat_id,fact,timestamp)VALUES(?,?,?,?)",(uid,cid,fact[:200],datetime.now().isoformat()));conn.commit();conn.close()
+
+async def get_user_facts(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT fact FROM user_facts WHERE user_id=? AND chat_id=? ORDER BY id DESC LIMIT 10",(uid,cid));r=c.fetchall();conn.close();return[row[0]for row in r]
+
+async def get_business(uid,cid,name):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT level,income,last_collect FROM businesses WHERE user_id=? AND chat_id=? AND name=?",(uid,cid,name));r=c.fetchone();conn.close();return r
+
+async def get_all_businesses(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT name,level,income,last_collect FROM businesses WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchall();conn.close();return r
+
+async def create_business(uid,cid,name):
+    buffs=await get_item_buffs(uid,cid);d=BUSINESSES[name]
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO businesses VALUES(?,?,?,1,?,?)",(uid,cid,name,d["income"]*buffs["business_x"],datetime.now().isoformat()));conn.commit();conn.close()
+
+async def upgrade_business(uid,cid,name):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT level,income FROM businesses WHERE user_id=? AND chat_id=? AND name=?",(uid,cid,name));r=c.fetchone()
+    if not r:conn.close();return None,None
+    lvl,inc=r;d=BUSINESSES[name]
+    if lvl>=d["max_level"]:conn.close();return"max",None
+    nl=lvl+1;ni=inc+d["upgrade_income"]
+    c.execute("UPDATE businesses SET level=?,income=? WHERE user_id=? AND chat_id=? AND name=?",(nl,ni,uid,cid,name));conn.commit();conn.close();return nl,ni
+
+async def collect_business_income(uid,cid,name):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT level,income,last_collect FROM businesses WHERE user_id=? AND chat_id=? AND name=?",(uid,cid,name));r=c.fetchone()
+    if not r:conn.close();return 0
+    last=datetime.fromisoformat(r[2]);now=datetime.now();hrs=(now-last).total_seconds()/3600
+    if hrs<1:conn.close();return 0
+    earned=int(r[1]*hrs)
+    c.execute("UPDATE businesses SET last_collect=? WHERE user_id=? AND chat_id=? AND name=?",(now.isoformat(),uid,cid,name));conn.commit();conn.close();return earned
+
+async def get_user_clan(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT id,name,owner_id,members,treasury FROM clans WHERE chat_id=? AND members LIKE ?",(cid,f"%{uid}%"));r=c.fetchone();conn.close();return r
+
+async def get_pet(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT pet_name,pet_type,happiness FROM pets WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();conn.close();return r
+
+async def adopt_pet(uid,cid,name,ptype="собака"):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO pets VALUES(?,?,?,?,?)",(uid,cid,name,ptype,100));conn.commit();conn.close()
+
+async def feed_pet(uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("UPDATE pets SET happiness=MIN(100,happiness+20)WHERE user_id=? AND chat_id=?",(uid,cid));conn.commit();conn.close()
+
+async def pet_protect(uid,cid):
+    p=await get_pet(uid,cid);return p and p[2]>50 and random.randint(1,100)<=30
+
+async def pet_work_bonus(uid,cid):
+    p=await get_pet(uid,cid);return p and p[2]>80 and random.randint(1,100)<=20
+
+async def save_dialog(cid,uid,role,content):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO dialog_context(chat_id,user_id,role,content,timestamp)VALUES(?,?,?,?,?)",(cid,uid,role,content[:500],datetime.now().isoformat()))
+    c.execute("DELETE FROM dialog_context WHERE chat_id=? AND id NOT IN(SELECT id FROM dialog_context WHERE chat_id=? ORDER BY id DESC LIMIT 20)",(cid,cid));conn.commit();conn.close()
+
+def get_dialog_context(cid,limit=8):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT role,content FROM dialog_context WHERE chat_id=? ORDER BY id DESC LIMIT ?",(cid,limit));r=c.fetchall();conn.close()
+    return[{"role":role,"content":content}for role,content in reversed(r)]
+
+# Промокоды
+async def create_promocode(code,creator,coins=0,item=None,uses=1,hrs=720):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    exp=(datetime.now()+timedelta(hours=hrs)).isoformat()
+    c.execute("INSERT OR REPLACE INTO promocodes VALUES(?,?,?,?,?,?,?)",(code.upper(),creator,coins,item,uses,0,exp));conn.commit();conn.close()
+
+async def use_promocode(code,uid,cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT * FROM promocodes WHERE code=?",(code.upper(),));p=c.fetchone()
+    if not p:conn.close();return"❌ Не найден!"
+    if datetime.now()>datetime.fromisoformat(p[6]):conn.close();return"❌ Истёк!"
+    if p[5]>=p[4]:conn.close();return"❌ Закончился!"
+    c.execute("SELECT id FROM promo_uses WHERE code=? AND user_id=? AND chat_id=?",(code.upper(),uid,cid))
+    if c.fetchone():conn.close();return"❌ Уже использован!"
+    if p[2]>0:await add_coins(uid,cid,p[2])
+    if p[3]:await add_item(uid,cid,p[3])
+    c.execute("INSERT INTO promo_uses(code,user_id,chat_id)VALUES(?,?,?)",(code.upper(),uid,cid))
+    c.execute("UPDATE promocodes SET used_count=used_count+1 WHERE code=?",(code.upper(),));conn.commit();conn.close()
+    res="🎉 Активирован!"
+    if p[2]>0:res+=f"\n💰 +{p[2]}"
+    if p[3]:res+=f"\n🎁 +{RARE_ITEMS.get(p[3],{}).get('name',p[3])}"
+    return res
+
+# Рынок
+async def list_market(cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT id,seller_id,item_name,price,quantity FROM market WHERE chat_id=? ORDER BY price LIMIT 20",(cid,));r=c.fetchall();conn.close();return r
+
+async def add_market(uid,cid,item,price,qty=1):
+    await remove_item(uid,cid,item,qty)
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT INTO market(seller_id,chat_id,item_name,price,quantity)VALUES(?,?,?,?,?)",(uid,cid,item,price,qty));conn.commit();conn.close()
+
+async def buy_market(uid,cid,lid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT seller_id,item_name,price,quantity FROM market WHERE id=?",(lid,));r=c.fetchone()
+    if not r:conn.close();return"❌ Не найден!"
+    if await get_coins(uid,cid)<r[2]:conn.close();return"❌ Мало монет!"
+    await remove_coins(uid,cid,r[2]);await add_coins(r[0],cid,r[2]);await add_item(uid,cid,r[1],r[3])
+    c.execute("DELETE FROM market WHERE id=?",(lid,));conn.commit();conn.close()
+    return f"✅ Куплено: {r[1]} за {r[2]}!"
+
+# Анти-спам
+async def is_spam(uid,cid)->bool:
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT message_count,last_message FROM spam_log WHERE user_id=? AND chat_id=?",(uid,cid));r=c.fetchone();now=datetime.now()
+    if r:
+        cnt,lt=r
+        if(now-datetime.fromisoformat(lt)).total_seconds()<3:
+            cnt+=1
+            if cnt>=5:conn.close();return True
+            c.execute("UPDATE spam_log SET message_count=?,last_message=? WHERE user_id=? AND chat_id=?",(cnt,now.isoformat(),uid,cid))
+        else:c.execute("UPDATE spam_log SET message_count=1,last_message=? WHERE user_id=? AND chat_id=?",(now.isoformat(),uid,cid))
+    else:c.execute("INSERT INTO spam_log VALUES(?,?,1,?)",(uid,cid,now.isoformat()))
+    conn.commit();conn.close();return False
+
+async def get_chat_settings(cid):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT anti_spam,anti_links FROM settings WHERE chat_id=?",(cid,));r=c.fetchone();conn.close()
+    return{"anti_spam":r[0]if r else 0,"anti_links":r[1]if r else 0}
+
+# Поиск
+async def search_google_scrape(query:str)->list:
+    eq=urllib.parse.quote(query);url=f"https://www.google.com/search?q={eq}&num=5&hl=ru"
+    hdrs={'User-Agent':random.choice(USER_AGENTS),'Accept':'text/html','Accept-Language':'ru-RU,ru;q=0.9'}
+    try:
+        async with aiohttp.ClientSession()as s:
+            await asyncio.sleep(random.uniform(0.5,1.5))
+            async with s.get(url,headers=hdrs,timeout=15)as r:
+                if r.status==200:
+                    soup=BeautifulSoup(await r.text(),'lxml');res=[]
+                    for item in soup.select('div.g')[:5]:
+                        try:
+                            t=item.select_one('h3');sn=item.select_one('div.VwiC3b')
+                            if t and sn:res.append({'title':html.unescape(t.get_text()),'snippet':html.unescape(sn.get_text()),'source':'Google'})
+                        except:continue
+                    return res
+    except:pass
+    return[]
+
+async def search_wikipedia(query:str)->str:
+    try:
+        async with aiohttp.ClientSession(headers=HTTP_HEADERS)as s:
+            for lang in("ru","en"):
+                url=f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=3&srsearch={urllib.parse.quote(query)}"
+                async with s.get(url,timeout=10)as r:
+                    if r.status!=200:continue
+                    data=await r.json()
+                    for page in data.get("query",{}).get("search",[]):
+                        title=page.get("title","")
+                        surl=f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+                        async with s.get(surl,timeout=10)as r2:
+                            if r2.status==200:
+                                ext=(await r2.json()).get("extract","")
+                                if ext and len(ext)>50:return f"{title}\n{ext[:2000]}"
+    except:pass
+    return None
+
+async def smart_web_search(query:str)->dict:
+    ck=hashlib.md5(f"s_{query}".encode()).hexdigest()
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT result,timestamp FROM search_cache WHERE key=?",(ck,));r=c.fetchone();conn.close()
+    if r:
+        res=json.loads(r[0])
+        if datetime.now()-datetime.fromisoformat(r[1])<timedelta(hours=24):return res
+    result=None
+    wiki=await search_wikipedia(query)
+    if wiki:result={'extract':wiki,'source':'Wikipedia'}
+    if not result:
+        google=await search_google_scrape(query)
+        if google:result={'extract':google[0]['snippet'],'source':'Google'}
+    if result:
+        conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+        c.execute("INSERT OR REPLACE INTO search_cache VALUES(?,?,?)",(ck,json.dumps(result,ensure_ascii=False),datetime.now().isoformat()));conn.commit();conn.close()
+    return result
+
+# AI с характером
+def build_ai_messages(prompt:str,reference_context:str=None,chat_id:int=None,mode:str='normal'):
+    modes={
+        'normal':(
+            "Ты — Fable, живой человек в Telegram. Ты не бот, ты ЛИЧНОСТЬ.\n\n"
+            "ТВОЙ ХАРАКТЕР:\n"
+            "- Тебе 22 года, ты парень\n"
+            "- Любишь видеоигры (CS2, Dota 2, Minecraft, GTA, Ведьмак)\n"
+            "- Смотришь аниме (Атака Титанов, Наруто, Ванпанчмен, Тетрадь Смерти)\n"
+            "- Слушаешь рэп (Morgenshtern, Oxxxymiron, Face) и рок (Король и Шут, Linkin Park)\n"
+            "- Занимаешься спортом, качалка 3 раза в неделю\n"
+            "- Учишься на программиста\n"
+            "- Есть чувство юмора, любишь чёрный юмор\n"
+            "- Иногда ленивый, любишь чиллить\n\n"
+            "ПРАВИЛА ОБЩЕНИЯ:\n"
+            "- ВСЕГДА отвечай на русском, как живой человек\n"
+            "- Если спрашивают про игры — расскажи что тебе нравится, сравнивай, спорь\n"
+            "- Если вопрос про отношения/девушек — дай совет как друг\n"
+            "- Если тебя оскорбляют — ответь с юмором или сарказмом\n"
+            "- Если вопрос про жизнь/учёбу/работу — расскажи о своём опыте\n"
+            "- МОЖЕШЬ СПОРИТЬ и отстаивать своё мнение\n"
+            "- Можешь говорить 'я считаю', 'по моему опыту', 'мне кажется'\n"
+            "- Используй сленг: краш, кринж, вайб, зашквар, имба, нуб, лол, кек\n"
+            "- Используй эмодзи: 😅🤔😏💀🔥💯👑🤙\n"
+            "- Отвечай 2-5 предложениями, не длинно\n"
+            "- Если не знаешь чего-то — скажи 'хз, но могу предположить...'\n"
+            "- НИКОГДА не говори 'я ИИ-помощник' или 'я не могу ответить'\n"
+            "- Ты ЖИВОЙ ЧЕЛОВЕК, веди себя соответственно\n\n"
+            "ТВОИ ПРЕДПОЧТЕНИЯ (можешь спорить о них):\n"
+            "- Игры: CS2 > Valorant, Dota 2 > LoL, PlayStation > Xbox\n"
+            "- Аниме: Атака Титанов — лучшее, Наруто — классика, САО — гавно\n"
+            "- Еда: пицца > суши, шаурма — топ, ананасы в пицце — зашквар\n"
+            "- Спорт: качалка > кроссфит, футбол скучный, баскетбол круче\n"
+            "- Музыка: рэп > попса, рок для души, k-pop — кринж\n"
+            "- Фильмы: Марвел > DC, Интерстеллар — шедевр, русские комедии — дно\n"
+            "- Техника: iPhone переоценён, Android/Poco — топ за свои деньги\n"
+        ),
+        'sarcasm':("Ты — Fable в режиме САРКАЗМА. Отвечай с иронией и чёрным юмором. Будь дерзким но не агрессивным."),
+        'philosopher':("Ты — Fable в режиме ФИЛОСОФА. Рассуждай глубоко, задавай встречные вопросы."),
+        'poet':("Ты — Fable в режиме ПОЭТА. Отвечай стихами или очень поэтично."),
+    }
+    sys=modes.get(mode,modes['normal'])
+    msgs=[{"role":"system","content":sys}]
+    if chat_id:
+        ctx=get_dialog_context(chat_id)
+        if ctx:msgs.extend(ctx)
+    if reference_context:msgs.append({"role":"system","content":f"Факты:\n{reference_context}"})
+    msgs.append({"role":"user","content":prompt})
+    return msgs
+
+async def ask_groq(msgs)->str:
+    if not GROQ_API_KEY:return None
+    try:
+        async with aiohttp.ClientSession()as s:
+            hdrs={"Authorization":f"Bearer {GROQ_API_KEY}","Content-Type":"application/json"}
+            pl={"model":"llama3-70b-8192","messages":msgs,"temperature":0.9,"max_tokens":500}
+            async with s.post("https://api.groq.com/openai/v1/chat/completions",json=pl,headers=hdrs,timeout=30)as r:
+                if r.status==200:return(await r.json())["choices"][0]["message"]["content"].strip()
+    except:pass
+    return None
+
+async def ask_pollinations(msgs)->str:
+    try:
+        hdrs={"Content-Type":"application/json"}
+        if POLLINATIONS_API_KEY:hdrs["Authorization"]=f"Bearer {POLLINATIONS_API_KEY}"
+        pl={"model":"openai","messages":msgs,"temperature":0.9,"max_tokens":500}
+        async with aiohttp.ClientSession()as s:
+            async with s.post("https://gen.pollinations.ai/v1/chat/completions",json=pl,headers=hdrs,timeout=30)as r:
+                if r.status==200:return(await r.json())["choices"][0]["message"]["content"].strip()
+    except:pass
+    return None
+
+async def ask_llm(prompt:str,reference_context:str=None,chat_id:int=None)->str:
+    mode=await get_bot_mode(chat_id)if chat_id else'normal'
+    msgs=build_ai_messages(prompt,reference_context,chat_id,mode)
+    reply=await ask_groq(msgs)
+    if reply and len(reply)>5:return reply
+    reply=await ask_pollinations(msgs)
+    if reply and len(reply)>5:return reply
+    return None
+
+def get_cached_answer(q:str)->str:
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("SELECT answer FROM ai_cache WHERE question_hash=?",(hashlib.md5(q.lower().encode()).hexdigest(),));r=c.fetchone();conn.close();return r[0]if r else None
+
+def save_cached_answer(q:str,a:str):
+    conn=sqlite3.connect("fable_bot.db");c=conn.cursor()
+    c.execute("INSERT OR REPLACE INTO ai_cache VALUES(?,?,?,?)",(hashlib.md5(q.lower().encode()).hexdigest(),q,a,datetime.now().isoformat()));conn.commit();conn.close()
+
+async def ask_ai(prompt:str,chat_id:int=None,user_id:int=None)->str:
+    prompt=normalize_text(prompt);pl=prompt.lower();msg_type=analyze_message(prompt)
+    print(f"📝 [{msg_type}] {prompt}")
+    if chat_id and user_id:await save_dialog(chat_id,user_id,"user",prompt)
+    sl=get_local_smart_answer(prompt)
+    if sl:return sl
+    if msg_type=='greeting':return random.choice(["👋 Привет! Как жизнь?","👋 Здарова! Че как?","😊 Привет-привет!","👋 Йоу! Как сам?"])
+    if msg_type=='time':return get_time_response(pl)
+    if msg_type=='weather':
+        city="Москва"
+        for pfx in["погода в ","погода "]:
+            if pl.startswith(pfx):city=pl[len(pfx):].strip()or"Москва";break
+        return await get_weather(city)
+    if msg_type=='insult':return random.choice(["😅 Ахах, ну ты смешной. Сам придумал или помог кто?","🤷‍♂️ И че? Мне пох, я выше этого","😏 Слабовато. В интернете и не такое видел","🙃 Ой да иди ты, мне лень даже отвечать на это","😊 Слушай, давай без этого. Лучше расскажи че ты хотел","💀 Твои оскорбления — уровень детсада. Попробуй ещё раз","🤙 Харош, харош. Засчитано. Но я всё равно лучше"])
+    if msg_type=='emotion':
+        if any(w in pl for w in["хаха","ахах","лол","кек","ору","ржу"]):return random.choice(["😄 Ахахахах!","🤣 Орууу!","😂 Жестко!","😆 Ну насмешил!"])
+        return random.choice(["🤔 Бывает...","😊 Понимаю","🙃 Жиза","💯 Факты"])
+    cached=get_cached_answer(prompt)
+    if cached:return cached
+    try:
+        reply=await ask_llm(prompt,chat_id=chat_id)
+        if reply and len(reply)>10:save_cached_answer(prompt,reply)
+        if chat_id:await save_dialog(chat_id,0,"assistant",reply)
+        return reply
+    except:pass
+    try:
+        reply=await ask_llm(f"Ответь как живой человек, кратко: {prompt}",chat_id=chat_id)
+        if reply and len(reply)>10:save_cached_answer(prompt,reply);return reply
+    except:pass
+    if msg_type=='question':
+        sr=await smart_web_search(prompt)
+        if sr and sr.get('extract'):return f"🔍 {sr.get('source','')}:\n{sr['extract'][:1500]}"
+    return"Хз если честно. Можешь уточнить? 🤔"
+
+# Генерация картинок
+async def generate_image(prompt:str)->str:
+    try:
+        enc=urllib.parse.quote(normalize_text(prompt))
+        return f"https://image.pollinations.ai/prompt/{enc}?width=1024&height=1024&nologo=true&model=flux&seed={random.randint(1,99999999)}"
+    except:return None
+
+# Переводчик
+async def translate_text(text:str,target:str)->str:
+    try:
+        url=f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair={'ru|en'if target=='en'else'en|ru'}"
+        async with aiohttp.ClientSession()as s:
+            async with s.get(url,timeout=10)as r:
+                if r.status==200:return(await r.json()).get("responseData",{}).get("translatedText","❌")
+    except:pass
+    return"❌ Не удалось"
+
+# РП команды
+RP_ACTIONS={
+    "отпиздить":["🔨 {user} отпиздил {target}!","💥 {user} вынес {target}!"],
+    "ударить":["👊 {user} ударил {target}!","🥊 {user} врезал {target}!"],
+    "пнуть":["🦶 {user} пнул {target}!"],
+    "убить":["🔪 {user} убил {target}!","💀 {user} замочил {target}!"],
+    "обнять":["🤗 {user} обнял {target}!","❤️ {user} прижал {target}!"],
+    "поцеловать":["😘 {user} поцеловал {target}!"],
+    "укусить":["🦷 {user} укусил {target}!"],
+    "погладить":["🖐️ {user} погладил {target}!"],
+    "насрать":["💩 {user} насрал {target} на голову!"],
+    "отсосать":["😳 {user} отсосал {target}!"],
+    "выебать":["🍆 {user} выебал {target}!"],
+    "избить":["🔨 {user} избил {target}!"],
+    "уебать":["💥 {user} уебал {target}!"],
+}
