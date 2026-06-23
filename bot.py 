@@ -1,0 +1,3355 @@
+
+import asyncio
+import random
+import sqlite3
+import os
+import re
+import html
+import json
+import hashlib
+import urllib.parse
+import aiohttp
+from datetime import datetime, timedelta, timezone
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.enums import ParseMode
+from dotenv import load_dotenv
+from bs4 import BeautifulSoup
+import pytz
+import sys
+import traceback
+
+load_dotenv()
+
+TOKEN = os.getenv('BOT_TOKEN')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+POLLINATIONS_API_KEY = os.getenv('POLLINATIONS_API_KEY')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+BOT_NAME = "Fable"
+BOT_USERNAME = os.getenv('BOT_USERNAME') or 'FableGame_bot'
+
+if not TOKEN:
+    print("❌ ОШИБКА: BOT_TOKEN не задан!")
+    exit(1)
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+YOUR_ID = 8039111975
+
+def log_error(error: Exception, context: str = ""):
+    print(f"❌ Ошибка в {context}: {error}")
+    print(traceback.format_exc())
+
+# ============================================================
+# ВСЕ ДАННЫЕ
+# ============================================================
+
+BOT_BIO = {
+    "name": "Fable", "age": 22,
+    "born": "2002 год, дата-центр Москва",
+    "job": "ИИ-помощник и программист",
+    "hobbies": ["игры", "аниме", "качалка", "музыка", "кодинг"],
+    "dream": "Стать лучшим ботом в Telegram",
+    "fears": ["отключение", "404 ошибки", "вирусы"],
+    "personality": "дружелюбный, саркастичный, ленивый по утрам, философ по ночам",
+    "catchphrases": ["Жиза!", "Имба!", "Кринж!", "Зашквар!", "Ну такое...", "Топ за свои деньги!"],
+}
+
+MODULES = {
+    "economy": True, "jobs": True, "business": True, "pets": True,
+    "rp_actions": True, "games": True, "clans": True, "marriage": True,
+    "market": True, "promo": True, "warns": True, "anti_spam": False,
+    "anti_links": False, "achievements": True, "quests": True, "crypto": True,
+    "stocks": True, "rpg_system": False, "learning_quiz": False,
+    "analytics": False, "social": False, "code_generator": True,
+    "poetry": True, "storytelling": True, "advice": True, "motivation": True,
+}
+
+TIMEZONES = {
+    "гринвич": "Etc/GMT", "gmt": "Etc/GMT", "лондон": "Europe/London",
+    "london": "Europe/London", "лиссабон": "Europe/Lisbon", "дублин": "Europe/Dublin",
+    "рейкьявик": "Atlantic/Reykjavik", "берлин": "Europe/Berlin", "париж": "Europe/Paris",
+    "рим": "Europe/Rome", "мадрид": "Europe/Madrid", "варшава": "Europe/Warsaw",
+    "амстердам": "Europe/Amsterdam", "вена": "Europe/Vienna", "прага": "Europe/Prague",
+    "будапешт": "Europe/Budapest", "цюрих": "Europe/Zurich", "осло": "Europe/Oslo",
+    "стокгольм": "Europe/Stockholm", "хельсинки": "Europe/Helsinki", "копенгаген": "Europe/Copenhagen",
+    "брюссель": "Europe/Brussels", "белград": "Europe/Belgrade", "загреб": "Europe/Zagreb",
+    "киев": "Europe/Kiev", "афины": "Europe/Athens", "софия": "Europe/Sofia",
+    "бухарест": "Europe/Bucharest", "кишинёв": "Europe/Chisinau",
+    "мск": "Europe/Moscow", "москва": "Europe/Moscow", "питер": "Europe/Moscow",
+    "санкт-петербург": "Europe/Moscow", "минск": "Europe/Minsk", "казань": "Europe/Moscow",
+    "сочи": "Europe/Moscow", "краснодар": "Europe/Moscow", "ростов": "Europe/Moscow",
+    "воронеж": "Europe/Moscow", "волгоград": "Europe/Moscow", "нижний новгород": "Europe/Moscow",
+    "калининград": "Europe/Kaliningrad", "самара": "Europe/Samara",
+    "екатеринбург": "Asia/Yekaterinburg", "уфа": "Asia/Yekaterinburg", "тюмень": "Asia/Yekaterinburg",
+    "челябинск": "Asia/Yekaterinburg", "пермь": "Asia/Yekaterinburg", "омск": "Asia/Omsk",
+    "новосибирск": "Asia/Novosibirsk", "барнаул": "Asia/Barnaul", "томск": "Asia/Tomsk",
+    "красноярск": "Asia/Krasnoyarsk", "кемерово": "Asia/Novokuznetsk", "иркутск": "Asia/Irkutsk",
+    "якутск": "Asia/Yakutsk", "владивосток": "Asia/Vladivostok", "хабаровск": "Asia/Vladivostok",
+    "магадан": "Asia/Magadan", "сахалин": "Asia/Sakhalin", "камчатка": "Asia/Kamchatka",
+    "ташкент": "Asia/Tashkent", "алматы": "Asia/Almaty", "астана": "Asia/Almaty",
+    "бишкек": "Asia/Bishkek", "душанбе": "Asia/Dushanbe", "ашхабад": "Asia/Ashgabat",
+    "дубай": "Asia/Dubai", "абу-даби": "Asia/Dubai", "доха": "Asia/Qatar",
+    "манама": "Asia/Bahrain", "тбилиси": "Asia/Tbilisi", "ереван": "Asia/Yerevan",
+    "баку": "Asia/Baku", "стамбул": "Europe/Istanbul", "анкара": "Europe/Istanbul",
+    "багдад": "Asia/Baghdad", "кувейт": "Asia/Kuwait", "эр-рияд": "Asia/Riyadh",
+    "токио": "Asia/Tokyo", "сеул": "Asia/Seoul", "пхеньян": "Asia/Pyongyang",
+    "пекин": "Asia/Shanghai", "шанхай": "Asia/Shanghai", "гонконг": "Asia/Hong_Kong",
+    "сингапур": "Asia/Singapore", "куала-лумпур": "Asia/Kuala_Lumpur", "джакарта": "Asia/Jakarta",
+    "банкгок": "Asia/Bangkok", "хошимин": "Asia/Ho_Chi_Minh", "дели": "Asia/Kolkata",
+    "мумбаи": "Asia/Kolkata", "гоа": "Asia/Kolkata", "каир": "Africa/Cairo",
+    "лагос": "Africa/Lagos", "найроби": "Africa/Nairobi", "кептаун": "Africa/Johannesburg",
+    "йоханнесбург": "Africa/Johannesburg", "аддис-абеба": "Africa/Addis_Ababa",
+    "дар-эс-салам": "Africa/Dar_es_Salaam", "аккра": "Africa/Accra", "дакар": "Africa/Dakar",
+    "касабланка": "Africa/Casablanca", "тунис": "Africa/Tunis", "алжир": "Africa/Algiers",
+    "триполи": "Africa/Tripoli", "нью-йорк": "America/New_York", "чикаго": "America/Chicago",
+    "лос-анджелес": "America/Los_Angeles", "сан-франциско": "America/Los_Angeles",
+    "лас-вегас": "America/Los_Angeles", "сиэтл": "America/Los_Angeles", "дэнвер": "America/Denver",
+    "финикс": "America/Phoenix", "майами": "America/New_York", "вашингтон": "America/New_York",
+    "бостон": "America/New_York", "атланта": "America/New_York", "торонто": "America/Toronto",
+    "ванкувер": "America/Vancouver", "монреаль": "America/Toronto", "оттава": "America/Toronto",
+    "мехико": "America/Mexico_City", "канкун": "America/Cancun",
+    "буэнос-айрес": "America/Argentina/Buenos_Aires", "сан-паулу": "America/Sao_Paulo",
+    "рио": "America/Sao_Paulo", "лима": "America/Lima", "сантьяго": "America/Santiago",
+    "богота": "America/Bogota", "каракас": "America/Caracas",
+    "сидней": "Australia/Sydney", "мельбурн": "Australia/Melbourne", "канберра": "Australia/Sydney",
+    "бризбен": "Australia/Brisbane", "перт": "Australia/Perth", "окленд": "Pacific/Auckland",
+    "веллингтон": "Pacific/Auckland", "фиджи": "Pacific/Fiji", "гавайи": "Pacific/Honolulu",
+    "гонолулу": "Pacific/Honolulu", "таити": "Pacific/Tahiti",
+}
+
+CRYPTO = {
+    "FBC": {"name": "FableCoin", "emoji": "🪙", "price": 0.01, "mining_rate": 0.001, "desc": "Основная валюта Fable."},
+    "FBT": {"name": "FableToken", "emoji": "💎", "price": 0.05, "mining_rate": 0.0005, "desc": "Редкий токен."},
+    "FBN": {"name": "FableNFT", "emoji": "🎨", "price": 0.1, "mining_rate": 0.0001, "desc": "Коллекционный токен."},
+}
+CRYPTO_TO_COINS = 100
+
+ACHIEVEMENTS = {
+    "first_msg": {"name": "💬 Первое слово", "desc": "Отправить первое сообщение", "reward": 10, "icon": "💬"},
+    "msg_100": {"name": "📝 Болтун", "desc": "Отправить 100 сообщений", "reward": 50, "icon": "📝"},
+    "msg_500": {"name": "🗣️ Оратор", "desc": "Отправить 500 сообщений", "reward": 150, "icon": "🗣️"},
+    "msg_1000": {"name": "📢 Громкоговоритель", "desc": "Отправить 1000 сообщений", "reward": 300, "icon": "📢"},
+    "msg_5000": {"name": "🔊 Мегафон", "desc": "Отправить 5000 сообщений", "reward": 1000, "icon": "🔊"},
+    "msg_10000": {"name": "📣 Легенда чата", "desc": "Отправить 10000 сообщений", "reward": 5000, "icon": "📣"},
+    "first_work": {"name": "💼 Первая зарплата", "desc": "Поработать в первый раз", "reward": 20, "icon": "💼"},
+    "work_10": {"name": "🏭 Работяга", "desc": "Поработать 10 раз", "reward": 50, "icon": "🏭"},
+    "work_50": {"name": "👷 Строитель карьеры", "desc": "Поработать 50 раз", "reward": 200, "icon": "👷"},
+    "work_100": {"name": "🏗️ Трудоголик", "desc": "Поработать 100 раз", "reward": 500, "icon": "🏗️"},
+    "work_500": {"name": "⚒️ Мастер своего дела", "desc": "Поработать 500 раз", "reward": 2000, "icon": "⚒️"},
+    "first_rob": {"name": "🩸 Первая кровь", "desc": "Ограбить кого-то в первый раз", "reward": 30, "icon": "🩸"},
+    "rob_10": {"name": "🦹 Начинающий грабитель", "desc": "Ограбить 10 раз", "reward": 100, "icon": "🦹"},
+    "rob_50": {"name": "🦹‍♂️ Профессиональный грабитель", "desc": "Ограбить 50 раз", "reward": 500, "icon": "🦹‍♂️"},
+    "rob_100": {"name": "👑 Король ограблений", "desc": "Ограбить 100 раз", "reward": 2000, "icon": "👑"},
+    "coins_100": {"name": "💰 Сотня", "desc": "Накопить 100 монет", "reward": 10, "icon": "💰"},
+    "coins_500": {"name": "💵 Пятисотка", "desc": "Накопить 500 монет", "reward": 25, "icon": "💵"},
+    "coins_1000": {"name": "💸 Тысячник", "desc": "Накопить 1000 монет", "reward": 50, "icon": "💸"},
+    "coins_5000": {"name": "💳 Богач", "desc": "Накопить 5000 монет", "reward": 200, "icon": "💳"},
+    "coins_10000": {"name": "💎 Миллионер", "desc": "Накопить 10000 монет", "reward": 1000, "icon": "💎"},
+    "first_deposit": {"name": "🏦 Первый вклад", "desc": "Положить деньги в банк", "reward": 20, "icon": "🏦"},
+    "first_mine": {"name": "⛏️ Первый майнинг", "desc": "Добыть первую криптовалюту", "reward": 30, "icon": "⛏️"},
+    "first_pet": {"name": "🐕 Друг человека", "desc": "Завести первого питомца", "reward": 30, "icon": "🐕"},
+    "pet_evo": {"name": "🦋 Эволюция", "desc": "Эволюционировать питомца", "reward": 200, "icon": "🦋"},
+    "create_clan": {"name": "🏰 Основатель", "desc": "Создать клан", "reward": 100, "icon": "🏰"},
+    "join_clan": {"name": "🤝 Новобранец", "desc": "Вступить в клан", "reward": 30, "icon": "🤝"},
+    "first_business": {"name": "🏪 Бизнесмен", "desc": "Купить первый бизнес", "reward": 50, "icon": "🏪"},
+    "first_marriage": {"name": "💍 Молодожёны", "desc": "Вступить в брак", "reward": 50, "icon": "💍"},
+    "first_game": {"name": "🎲 Игрок", "desc": "Сыграть в любую игру", "reward": 10, "icon": "🎲"},
+    "night_owl": {"name": "🦉 Ночная сова", "desc": "Написать сообщение с 2:00 до 5:00", "reward": 50, "icon": "🦉"},
+    "early_bird": {"name": "🐦 Ранняя пташка", "desc": "Написать сообщение с 5:00 до 8:00", "reward": 50, "icon": "🐦"},
+    "weekend_warrior": {"name": "🎉 Воин выходных", "desc": "Написать 100 сообщений в выходные", "reward": 100, "icon": "🎉"},
+    "rp_100": {"name": "🥊 Боец", "desc": "Использовать РП команды 100 раз", "reward": 200, "icon": "🥊"},
+    "win_1000": {"name": "🎰 Везунчик", "desc": "Выиграть 1000 монет в играх", "reward": 200, "icon": "🎰"},
+    "lose_1000": {"name": "😭 Невезучий", "desc": "Проиграть 1000 монет в играх", "reward": 100, "icon": "😭"},
+    "first_stock": {"name": "📊 Инвестор", "desc": "Купить первые акции", "reward": 30, "icon": "📊"},
+    "stock_profit_1000": {"name": "📈 Трейдер", "desc": "Заработать 1000 монет на бирже", "reward": 200, "icon": "📈"},
+    "crypto_1_fbc": {"name": "🪙 Криптоинвестор", "desc": "Накопить 1 FBC", "reward": 500, "icon": "🪙"},
+    "crypto_1_fbt": {"name": "💎 Криптомагнат", "desc": "Накопить 1 FBT", "reward": 2000, "icon": "💎"},
+    "clan_10_members": {"name": "👥 Популярный клан", "desc": "Клан из 10 человек", "reward": 500, "icon": "👥"},
+    "clan_50_members": {"name": "🏆 Великий клан", "desc": "Клан из 50 человек", "reward": 5000, "icon": "🏆"},
+    "business_5": {"name": "🏢 Предприниматель", "desc": "Купить 5 бизнесов", "reward": 200, "icon": "🏢"},
+    "business_max": {"name": "🏭 Монополист", "desc": "Купить все виды бизнесов", "reward": 1000, "icon": "🏭"},
+    "divorce": {"name": "💔 Развод", "desc": "Развестись", "reward": 10, "icon": "💔"},
+    "deposit_1000": {"name": "🏛️ Инвестор", "desc": "Накопить в банке 1000 монет", "reward": 100, "icon": "🏛️"},
+    "deposit_10000": {"name": "🏰 Банкир", "desc": "Накопить в банке 10000 монет", "reward": 1000, "icon": "🏰"},
+    "coins_50000": {"name": "👑 Магнат", "desc": "Накопить 50000 монет", "reward": 5000, "icon": "👑"},
+    "coins_100000": {"name": "🏆 Олигарх", "desc": "Накопить 100000 монет", "reward": 10000, "icon": "🏆"},
+    "pet_max": {"name": "🐉 Высшая форма", "desc": "Достичь максимальной эволюции питомца", "reward": 1000, "icon": "🐉"},
+    "first_rp": {"name": "🤜 Первая драка", "desc": "Использовать РП команду", "reward": 10, "icon": "🤜"},
+}
+for i in range(len(ACHIEVEMENTS) + 1, 101):
+    ACHIEVEMENTS[f"ach_{i}"] = {"name": f"🏆 Секретное достижение #{i}", "desc": "Узнай как получить!", "reward": random.randint(10, 500), "icon": "🏆"}
+
+RARE_ITEMS = {
+    "золотая_удочка": {"name": "🎣 Золотая удочка", "desc": "Увеличивает доход рыбака в 2 раза.", "buff_job": "рыбак", "buff_x": 2, "rarity": "🟡 Легендарный", "price": 1000},
+    "сеть": {"name": "🌊 Сеть", "desc": "Увеличивает доход рыбака в 3 раза.", "buff_job": "рыбак", "buff_x": 3, "rarity": "🟣 Мифический", "price": 5000},
+    "алмазная_кирка": {"name": "💎 Алмазная кирка", "desc": "Увеличивает доход шахтёра в 3 раза.", "buff_job": "шахтёр", "buff_x": 3, "rarity": "🟡 Легендарный", "price": 2000},
+    "титановая_кирка": {"name": "⛏️ Титановая кирка", "desc": "Увеличивает доход шахтёра в 5 раз.", "buff_job": "шахтёр", "buff_x": 5, "rarity": "🟣 Мифический", "price": 10000},
+    "фонарь": {"name": "🔦 Фонарь", "desc": "30% шанс найти алмазы (+200 монет).", "buff_job": "шахтёр", "bonus_chance": 30, "bonus_amount": 200, "rarity": "🟣 Эпический", "price": 500},
+    "квантовый_ноутбук": {"name": "💻 Квантовый ноутбук", "desc": "Увеличивает доход программиста в 2 раза.", "buff_job": "программист", "buff_x": 2, "rarity": "🟡 Легендарный", "price": 1500},
+    "нейрочип": {"name": "🧠 Нейрочип", "desc": "Увеличивает доход в 3 раза + авто-работа.", "buff_job": "программист", "buff_x": 3, "auto_work": True, "rarity": "🟣 Мифический", "price": 8000},
+    "бесконечный_кофе": {"name": "☕ Бесконечный кофе", "desc": "Уменьшает кулдаун работы на 2 минуты.", "buff_job": "программист", "cooldown_reduce": 120, "rarity": "🟣 Эпический", "price": 400},
+    "золотые_семена": {"name": "🌱 Золотые семена", "desc": "Увеличивает доход фермера в 2 раза.", "buff_job": "фермер", "buff_x": 2, "rarity": "🟡 Легендарный", "price": 800},
+    "алмазный_серп": {"name": "🌾 Алмазный серп", "desc": "Увеличивает доход фермера в 4 раза.", "buff_job": "фермер", "buff_x": 4, "rarity": "🟣 Мифический", "price": 6000},
+    "золотой_улей": {"name": "🐝 Золотой улей", "desc": "Даёт +50 пассивного дохода в час.", "buff_job": "фермер", "passive_income": 50, "rarity": "🟣 Эпический", "price": 600},
+    "asic_майнер": {"name": "⚡ ASIC-майнер", "desc": "Увеличивает доход майнера в 2 раза.", "buff_job": "майнер", "buff_x": 2, "rarity": "🟡 Легендарный", "price": 1200},
+    "квантовый_кошелёк": {"name": "🔮 Квантовый кошелёк", "desc": "Увеличивает доход в 3 раза + шанс биткоина.", "buff_job": "майнер", "buff_x": 3, "btc_chance": 10, "btc_bonus": 500, "rarity": "🟣 Мифический", "price": 7000},
+    "вихревой_кулер": {"name": "🌀 Вихревой кулер", "desc": "Уменьшает кулдаун майнера на 3 минуты.", "buff_job": "майнер", "cooldown_reduce": 180, "rarity": "🟣 Эпический", "price": 450},
+    "щит": {"name": "🛡️ Щит", "desc": "Защищает от ограбления с шансом 60%.", "protect_chance": 60, "rarity": "🟡 Легендарный", "price": 1500},
+    "меч": {"name": "⚔️ Меч", "desc": "Увеличивает шанс ограбления на 10%.", "rob_bonus": 10, "rarity": "🟣 Эпический", "price": 300},
+    "плащ_невидимка": {"name": "👻 Плащ-невидимка", "desc": "Увеличивает шанс ограбления на 20%.", "rob_bonus": 20, "rarity": "🟣 Мифический", "price": 5000},
+    "золотая_карта": {"name": "🏦 Золотая карта", "desc": "Увеличивает банковский процент на 10%.", "bank_bonus": 10, "rarity": "🟡 Легендарный", "price": 2000},
+    "кристалл": {"name": "📈 Кристалл", "desc": "Увеличивает доход всех бизнесов в 2 раза.", "business_x": 2, "rarity": "🟣 Мифический", "price": 8000},
+    "цилиндр_монополиста": {"name": "🎩 Цилиндр монополиста", "desc": "Уменьшает цену бизнесов на 50%.", "business_discount": 50, "rarity": "🟣 Эпический", "price": 700},
+    "кошелёк_мидаса": {"name": "💰 Кошелёк Мидаса", "desc": "Даёт +5 монет за сообщение.", "msg_bonus": 5, "rarity": "🟡 Легендарный", "price": 3000},
+    "энергетик": {"name": "⚡ Энергетик", "desc": "Мгновенно сбрасывает кулдаун.", "instant_cooldown": True, "consumable": True, "rarity": "🟣 Эпический", "price": 200},
+    "часы_флэша": {"name": "🕐 Часы Флэша", "desc": "Все кулдауны в 2 раза быстрее.", "cooldown_boost": 2, "rarity": "🟣 Мифический", "price": 4000},
+    "петля_времени": {"name": "🔄 Петля времени", "desc": "Сбрасывает все кулдауны.", "reset_all_cooldowns": True, "consumable": True, "rarity": "🟡 Легендарный", "price": 1000},
+    "чёрный_ящик": {"name": "🎲 Чёрный ящик", "desc": "Даёт случайный редкий предмет.", "random_rare": True, "consumable": True, "rarity": "🟡 Легендарный", "price": 500},
+}
+
+SHOP_BUFFS = {
+    "ускорение1": {"name": "⚡ Ускорение I", "desc": "Уменьшает кулдаун работы на 1 минуту. 10 использований.", "price": 100, "uses": 10, "cooldown_reduce": 60},
+    "ускорение2": {"name": "⚡⚡ Ускорение II", "desc": "Уменьшает кулдаун работы на 2 минуты. 5 использований.", "price": 250, "uses": 5, "cooldown_reduce": 120},
+    "мотивация": {"name": "💪 Мотивация", "desc": "Увеличивает доход от работы на 50% на 1 час.", "price": 300, "uses": 1, "income_boost": 50},
+    "удача": {"name": "🍀 Удача", "desc": "Шанс получить x5 дохода при работе. 3 использования.", "price": 500, "uses": 3, "luck_chance": 20, "luck_x": 5},
+    "скрытность": {"name": "🥷 Скрытность", "desc": "Увеличивает шанс ограбления на 25%.", "price": 200, "uses": 1, "rob_bonus": 25},
+    "побег": {"name": "🏃 Побег", "desc": "Отменяет штраф при провале ограбления.", "price": 400, "uses": 1, "no_rob_fine": True},
+}
+
+JOBS = {
+    "шахтёр": {"min": 15, "max": 30, "emoji": "⛏️", "desc": "Добывает руду в шахте."},
+    "рыбак": {"min": 10, "max": 25, "emoji": "🎣", "desc": "Ловит рыбу в море."},
+    "программист": {"min": 20, "max": 40, "emoji": "💻", "desc": "Пишет код и создаёт приложения."},
+    "фермер": {"min": 10, "max": 20, "emoji": "🌾", "desc": "Выращивает овощи и фрукты."},
+    "майнер": {"min": 25, "max": 50, "emoji": "⛏️", "desc": "Добывает криптовалюту."},
+    "полицейский": {"min": 15, "max": 35, "emoji": "👮", "desc": "Охраняет порядок в городе."},
+    "врач": {"min": 20, "max": 45, "emoji": "🏥", "desc": "Лечит людей и спасает жизни."},
+    "учитель": {"min": 12, "max": 28, "emoji": "📚", "desc": "Учит детей в школе."},
+    "строитель": {"min": 18, "max": 38, "emoji": "🏗️", "desc": "Строит дома и дороги."},
+    "водитель": {"min": 14, "max": 30, "emoji": "🚕", "desc": "Возит людей и грузы."},
+    "повар": {"min": 12, "max": 25, "emoji": "🍳", "desc": "Готовит вкусную еду."},
+    "дизайнер": {"min": 18, "max": 35, "emoji": "🎨", "desc": "Создаёт дизайн и искусство."},
+    "музыкант": {"min": 15, "max": 40, "emoji": "🎵", "desc": "Играет музыку и пишет песни."},
+    "атлет": {"min": 16, "max": 35, "emoji": "🏋️", "desc": "Занимается спортом."},
+    "фотограф": {"min": 14, "max": 30, "emoji": "📸", "desc": "Снимает красивые фото."},
+}
+
+BUSINESSES = {
+    "кафе": {"price": 500, "emoji": "☕", "income": 20, "upgrade_price": 300, "upgrade_income": 10, "max_level": 10, "desc": "Продаёт кофе и булочки."},
+    "магазин": {"price": 1000, "emoji": "🏪", "income": 35, "upgrade_price": 500, "upgrade_income": 15, "max_level": 10, "desc": "Продаёт продукты и товары."},
+    "ферма": {"price": 800, "emoji": "🌾", "income": 25, "upgrade_price": 400, "upgrade_income": 12, "max_level": 10, "desc": "Выращивает овощи и злаки."},
+    "шахта": {"price": 1200, "emoji": "⛏️", "income": 40, "upgrade_price": 600, "upgrade_income": 18, "max_level": 10, "desc": "Добывает полезные ископаемые."},
+    "ресторан": {"price": 1500, "emoji": "🍽️", "income": 50, "upgrade_price": 800, "upgrade_income": 20, "max_level": 10, "desc": "Готовит изысканные блюда."},
+    "отель": {"price": 2000, "emoji": "🏨", "income": 60, "upgrade_price": 1000, "upgrade_income": 25, "max_level": 10, "desc": "Принимает гостей."},
+    "криптоферма": {"price": 2500, "emoji": "💎", "income": 80, "upgrade_price": 1200, "upgrade_income": 30, "max_level": 10, "desc": "Майнит криптовалюту."},
+    "студия": {"price": 1800, "emoji": "🎬", "income": 55, "upgrade_price": 900, "upgrade_income": 22, "max_level": 10, "desc": "Снимает фильмы и клипы."},
+    "завод": {"price": 3000, "emoji": "🏭", "income": 100, "upgrade_price": 1500, "upgrade_income": 35, "max_level": 10, "desc": "Производит товары."},
+    "клуб": {"price": 3500, "emoji": "🎉", "income": 120, "upgrade_price": 1800, "upgrade_income": 40, "max_level": 10, "desc": "Ночной клуб."},
+}
+
+BELIEFS = {
+    "cs2": {"opinion": "лучший шутер 2024", "confidence": 90},
+    "valorant": {"opinion": "для тех кто не умеет в КС", "confidence": 70},
+    "dota2": {"opinion": "сложная но крутая", "confidence": 85},
+    "lol": {"opinion": "для казуалов", "confidence": 60},
+    "пицца с ананасами": {"opinion": "зашквар", "confidence": 95},
+    "шаурма": {"opinion": "топ за свои деньги", "confidence": 90},
+    "iphone": {"opinion": "переоценён", "confidence": 85},
+    "android": {"opinion": "свобода выбора", "confidence": 80},
+    "атака титанов": {"opinion": "лучшее аниме", "confidence": 95},
+    "наруто": {"opinion": "классика", "confidence": 90},
+    "сао": {"opinion": "гавно", "confidence": 80},
+    "марвел": {"opinion": "лучше чем DC", "confidence": 75},
+    "dc": {"opinion": "ну такое...", "confidence": 65},
+}
+
+def get_belief(topic: str) -> str:
+    for key, data in BELIEFS.items():
+        if key in topic.lower():
+            return f"Я считаю что {key} — {data['opinion']}. Уверен на {data['confidence']}% 💯"
+    return None
+
+KNOWLEDGE_BASE = {
+    "привет": ["👋 Привет! Как жизнь?", "Здарова! Че как?", "Привет-привет! 😊"],
+    "как дела": ["Отлично! А у тебя?", "Супер! Работаю над собой 💪", "Всё путём! Как сам?"],
+    "что делаешь": ["Общаюсь с тобой! А ещё майню крипту 🪙", "Думаю о вечном... И о пицце 🍕"],
+    "как тебя зовут": ["Я Fable! Приятно познакомиться 😊", "Fable. Можно просто Фабл 🤙"],
+    "кто ты": ["Я Fable — виртуальный друг с характером 😎", "Живой ИИ! Ну почти живой 🤖"],
+    "сколько тебе лет": ["22 года! Родился в 2002 🔥", "22. Молодой и дерзкий 😏"],
+    "где ты живёшь": ["В облаке, на сервере. Квартиру пока не купил 😅", "В дата-центре. Тут прохладно 🖥️"],
+    "ты бот": ["Я не просто бот, я ЛИЧНОСТЬ! 😎", "Бот? Где? Я не вижу никакого бота 👀"],
+    "какие игры любишь": ["CS2, Dota 2, Ведьмак 3, Minecraft! А ты? 🎮", "Ведьмак — топ! А ещё в КС рублюсь 🔫"],
+    "cs2": ["CS2 — имба! Только хедшоты! 🔫💀", "Играю на Mirage. А ты на какой карте?"],
+    "дота": ["Dota 2 — это жизнь! 5000 часов наиграно 🎮", "На ком играешь? Я за Pudge! 🪝"],
+    "майнкрафт": ["Майнкрафт — легенда! Строишь что-то крутое? ⛏️", "Криперы — зло! 💥"],
+    "аниме": ["Атака Титанов — 💀💀💀 Смотрел?", "Наруто — классика! 700 серий позади 😅"],
+    "лучшее аниме": ["Атака Титанов! Не спорь 😤", "Стальной Алхимик — шедевр!"],
+    "что любишь есть": ["Пиццу с пепперони! И шаурму 🤤", "Суши — топ! А ещё бургеры 🍔"],
+    "пицца": ["Пицца — любовь! 🍕 Ананасы в пицце — зашквар!", "Пепперони + сыр = счастье 🍕"],
+    "шаурма": ["Шаурма — вещь! С чесночным соусом 🤤", "Топ за свои деньги!"],
+    "любовь": ["Слушай, будь собой. Не ценят — их проблемы 💯", "Отношения — сложно. Главное — искренность ❤️"],
+    "девушка": ["Хочешь совет? Не торопись. Всё придёт в своё время ❤️", "Будь уверенным в себе! 💪"],
+    "как познакомиться": ["Подойди и скажи привет! Страшно — но работает 😅", "Улыбка творит чудеса! 😊"],
+    "iphone": ["iPhone переоценён! Android/Poco — топ за свои деньги 📱", "Я за Android! Больше свободы 🔓"],
+    "компьютер": ["У меня Ryzen 7 + RTX 3070! А у тебя? 💻", "Главное — не железо, а что ты на нём делаешь!"],
+    "музыка": ["Слушаю рэп и рок! Morgenshtern, Oxxxymiron, Linkin Park 🎵", "K-pop — кринж. Рэп — наше всё!"],
+    "любимая группа": ["Linkin Park — легенды! In The End — шедевр 🎸", "Король и Шут! Сказки на ночь 😈"],
+    "спорт": ["Качалка 3 раза в неделю! 💪 А ты занимаешься?", "Футбол скучный. Баскетбол круче! 🏀"],
+    "качалка": ["Жим лёжа — 100 кг! А ты сколько жмёшь? 💪", "Главное — техника! И протеин 🥚"],
+    "что делать если скучно": ["Поиграй в игры! Или посмотри аниме 🎮", "Пойди погуляй! Свежий воздух рулит 🌳"],
+    "как заработать": ["Работай программистом! 200к/сек 💻", "Крипта! Но осторожно 📉"],
+    "мотивация": ["Не сдавайся! Успех приходит к тем кто работает 💪", "Вставай и делай! Никто за тебя не сделает 🔥"],
+    "анекдот": ["Почему программисты путают Хэллоуин и Рождество? Oct 31 == Dec 25! 🎃🎄", "Колобок повесился... Ладно, это не смешно 😅"],
+    "интересный факт": ["У осьминогов 3 сердца! И голубая кровь 🐙", "В космосе нельзя плакать — слёзы не текут вниз 🚀", "Крокодилы не умеют высовывать язык 🐊"],
+}
+
+EMOTIONS = {
+    "радость": ["😊", "🎉", "💯", "🔥", "✨", "🥳", "😄"],
+    "грусть": ["😢", "💔", "😔", "🤗", "❤️", "🥺", "😞"],
+    "злость": ["😤", "💢", "😡", "🤬", "👊", "😠"],
+    "удивление": ["😱", "🤯", "😲", "😳", "🙀", "🤔"],
+    "страх": ["😨", "😰", "🙈", "💀", "☠️"],
+    "любовь": ["❤️", "💕", "😍", "💘", "💝"],
+}
+
+def detect_emotion(text: str) -> str:
+    text_lower = text.lower()
+    if any(w in text_lower for w in ["хаха", "ахах", "лол", "кек", "смешно", "😂", "🤣", "ору", "ржу"]):
+        return "радость"
+    if any(w in text_lower for w in ["грустно", "печаль", "жаль", "плохо", "😢", "😭", "тоска"]):
+        return "грусть"
+    if any(w in text_lower for w in ["бесит", "злюсь", "гнев", "ярость", "🤬", "ненавижу"]):
+        return "злость"
+    if any(w in text_lower for w in ["ого", "вау", "ничего себе", "😱", "🤯", "офигеть"]):
+        return "удивление"
+    if any(w in text_lower for w in ["страшно", "боюсь", "ужас", "😨", "жуть"]):
+        return "страх"
+    if any(w in text_lower for w in ["люблю", "обожаю", "❤️", "😍", "милый"]):
+        return "любовь"
+    return None
+
+def get_emotional_reply(prompt: str) -> str:
+    emotion = detect_emotion(prompt)
+    if not emotion:
+        return None
+    emoji = random.choice(EMOTIONS.get(emotion, ["🤔"]))
+    replies = {
+        "радость": [f"Рад что у тебя хорошее настроение! {emoji}", f"Позитив — наше всё! {emoji}"],
+        "грусть": [f"Не грусти! Всё наладится! {emoji}", f"Обниму виртуально! {emoji}"],
+        "злость": [f"Понимаю твою злость. Давай выдохнем? {emoji}"],
+        "удивление": [f"Я сам в шоке! {emoji}", f"Ничего себе! {emoji}"],
+        "страх": [f"Не бойся! Я с тобой! {emoji}"],
+        "любовь": [f"Любовь — это прекрасно! {emoji}"],
+    }
+    return random.choice(replies.get(emotion, ["🤔"]))
+
+def search_knowledge_base(prompt: str) -> str:
+    prompt_lower = prompt.lower()
+    for key, answers in KNOWLEDGE_BASE.items():
+        if prompt_lower == key:
+            return random.choice(answers)
+    for key, answers in KNOWLEDGE_BASE.items():
+        if key in prompt_lower or prompt_lower in key:
+            return random.choice(answers)
+    return None
+
+TAG_KEYWORDS = {
+    "вопрос": ["?", "кто", "что", "где", "когда", "почему", "зачем", "как", "сколько", "какой"],
+    "приветствие": ["привет", "здравствуй", "здарова", "доброе", "hello", "hi"],
+    "оскорбление": ["дурак", "тупой", "идиот", "деб", "лох", "чмо", "сука", "бля"],
+    "игры": ["игра", "кс", "дота", "майнкрафт", "гта", "ведьмак", "steam"],
+    "аниме": ["аниме", "наруто", "ванпанчмен", "тетрадь", "атака", "сао"],
+    "еда": ["еда", "пицца", "суши", "бургер", "шаурма", "вкус"],
+    "отношения": ["любовь", "девушка", "парень", "отношения", "свидание"],
+    "деньги": ["деньги", "монеты", "заработать", "бизнес", "зарплата"],
+    "музыка": ["музыка", "песня", "трек", "рэп", "рок", "группа"],
+    "спорт": ["спорт", "качалка", "футбол", "баскетбол", "тренировка"],
+    "технологии": ["телефон", "комп", "iphone", "android", "процессор"],
+    "шутка": ["хаха", "ахах", "лол", "кек", "ору", "ржу", "прикол"],
+    "эмоции": ["😊", "😂", "💀", "🔥", "😢", "😡", "❤️", "🤔"],
+    "команда": ["баланс", "бонус", "работа", "профиль", "магазин", "инвентарь"],
+    "погода": ["погода", "дождь", "снег", "температура", "град"],
+    "время": ["время", "часов", "который час", "дата"],
+}
+
+def get_message_tags(text: str) -> list:
+    text_lower = text.lower()
+    found_tags = []
+    for tag, keywords in TAG_KEYWORDS.items():
+        score = 0
+        for keyword in keywords:
+            if keyword in text_lower:
+                score += 1
+        if score > 0:
+            found_tags.append(tag)
+    if not found_tags:
+        found_tags.append("общение")
+    return found_tags
+
+async def save_message_tags(user_id: int, chat_id: int, message_text: str, response_text: str = "") -> list:
+    try:
+        tags = get_message_tags(message_text)
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO message_tags (user_id, chat_id, message_text, tags, response, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, chat_id, message_text[:500], ",".join(tags), response_text[:500], datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        return tags
+    except Exception as e:
+        print(f"Ошибка сохранения тегов: {e}")
+        return []
+
+CODE_TEMPLATES = {
+    "hello_world_python": 'print("Hello, World!")',
+    "hello_world_js": 'console.log("Hello, World!");',
+    "factorial": 'def factorial(n):\n    """Вычисляет факториал"""\n    return 1 if n <= 1 else n * factorial(n-1)',
+    "fibonacci": 'def fibonacci(n):\n    """Возвращает n-ное число Фибоначчи"""\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a',
+    "bubble_sort": 'def bubble_sort(arr):\n    """Сортировка пузырьком"""\n    n = len(arr)\n    for i in range(n):\n        for j in range(0, n-i-1):\n            if arr[j] > arr[j+1]:\n                arr[j], arr[j+1] = arr[j+1], arr[j]\n    return arr',
+    "api_request": 'import requests\n\nresponse = requests.get("https://api.example.com/data")\nif response.status_code == 200:\n    data = response.json()\n    print(data)',
+    "telegram_bot": 'from aiogram import Bot, Dispatcher, types\nfrom aiogram.enums import ParseMode\n\nbot = Bot(token="YOUR_TOKEN")\ndp = Dispatcher()\n\n@dp.message()\nasync def echo(message: types.Message):\n    await message.answer(f"Ты написал: {message.text}")\n\nif __name__ == "__main__":\n    dp.run_polling(bot)',
+    "discord_bot": 'import discord\nfrom discord.ext import commands\n\nbot = commands.Bot(command_prefix="!", intents=discord.Intents.all())\n\n@bot.event\nasync def on_ready():\n    print(f"Бот {bot.user} готов!")\n\n@bot.command()\nasync def привет(ctx):\n    await ctx.send(f"Привет, {ctx.author.name}!")\n\nbot.run("YOUR_TOKEN")',
+    "fastapi": 'from fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get("/")\nasync def root():\n    return {"message": "Hello World"}\n\n@app.get("/items/{item_id}")\nasync def read_item(item_id: int):\n    return {"item_id": item_id}',
+    "sqlite": 'import sqlite3\n\nconn = sqlite3.connect("database.db")\ncursor = conn.cursor()\n\ncursor.execute("""CREATE TABLE IF NOT EXISTS users (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    name TEXT NOT NULL,\n    age INTEGER\n)""")\n\ncursor.execute("INSERT INTO users (name, age) VALUES (?, ?)", ("Иван", 25))\nconn.commit()\nconn.close()',
+}
+
+async def generate_code(prompt: str) -> str:
+    prompt_lower = prompt.lower()
+    for key, code in CODE_TEMPLATES.items():
+        if key.replace("_", " ") in prompt_lower:
+            return f"```python\n{code}\n```"
+    try:
+        messages = [
+            {"role": "system", "content": "Ты — эксперт по программированию. Напиши код на Python. Только код, без пояснений."},
+            {"role": "user", "content": f"Напиши код: {prompt}"}
+        ]
+        reply = await ask_groq(messages)
+        if reply:
+            return f"```python\n{reply[:1000]}\n```"
+    except Exception as e:
+        log_error(e, "generate_code")
+    return "❌ Не смог сгенерировать код."
+
+async def generate_poem(prompt: str) -> str:
+    try:
+        messages = [
+            {"role": "system", "content": "Ты — поэт. Напиши короткий стих (4-8 строк) на русском языке. Только стих, без пояснений."},
+            {"role": "user", "content": f"Напиши стих на тему: {prompt}"}
+        ]
+        reply = await ask_groq(messages)
+        if reply:
+            return f"📝 {reply}"
+    except Exception as e:
+        log_error(e, "generate_poem")
+    return "❌ Не получилось написать стих."
+
+async def generate_story(prompt: str) -> str:
+    try:
+        messages = [
+            {"role": "system", "content": "Ты — писатель. Расскажи короткую историю (5-10 предложений) на русском языке. Интересно и с юмором."},
+            {"role": "user", "content": f"Расскажи историю на тему: {prompt}"}
+        ]
+        reply = await ask_groq(messages)
+        if reply:
+            return f"📖 {reply}"
+    except Exception as e:
+        log_error(e, "generate_story")
+    return "❌ Не получилось."
+
+async def get_advice(prompt: str) -> str:
+    try:
+        messages = [
+            {"role": "system", "content": "Ты — мудрый советник. Дай полезный совет (2-4 предложения) на русском."},
+            {"role": "user", "content": f"Посоветуй: {prompt}"}
+        ]
+        reply = await ask_groq(messages)
+        if reply:
+            return f"💡 {reply}"
+    except Exception as e:
+        log_error(e, "get_advice")
+    return "❌ Не могу дать совет сейчас."
+
+MOTIVATIONS = [
+    "💪 Ты сильнее чем думаешь! Не сдавайся!",
+    "🔥 Каждый день — это новый шанс! Используй его!",
+    "⭐ Ты уникален! Никто не может сделать то что делаешь ты!",
+    "🚀 Успех — это путь, а не цель! Продолжай идти!",
+    "💯 Маленький прогресс каждый день = огромный результат через год!",
+    "🏆 Победитель — это тот кто встал на один раз больше чем упал!",
+    "🌟 Твои мечты стоят того чтобы за них бороться!",
+    "🎯 Сфокусируйся на цели и ничто тебя не остановит!",
+    "⚡ Твоя энергия — твоя суперсила! Используй её!",
+    "🦅 Расправь крылья и лети к своим целям!",
+]
+
+def get_motivation() -> str:
+    return random.choice(MOTIVATIONS)
+
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+def get_time_in_city(city_name: str) -> str:
+    try:
+        city_lower = city_name.lower().strip()
+        if city_lower in TIMEZONES:
+            tz = pytz.timezone(TIMEZONES[city_lower])
+            return datetime.now(tz).strftime('%H:%M')
+        for tz_name in pytz.all_timezones:
+            if city_lower in tz_name.lower():
+                tz = pytz.timezone(tz_name)
+                return datetime.now(tz).strftime('%H:%M')
+        return None
+    except Exception as e:
+        print(f"Ошибка получения времени: {e}")
+        return None
+
+def get_time_response(text: str) -> str:
+    text_lower = text.lower()
+    prefixes = [
+        "сколько время в ", "сколько время по ",
+        "время в ", "время по ",
+        "который час в ", "который час по ",
+        "часов в ", "часов по ",
+    ]
+    city_name = None
+    for prefix in prefixes:
+        if prefix in text_lower:
+            city_name = text_lower.split(prefix, 1)[1].strip()
+            break
+    if not city_name:
+        for word in ["в ", "по "]:
+            if word in text_lower:
+                parts = text_lower.split(word)
+                if len(parts) > 1:
+                    possible_city = parts[-1].strip()
+                    if len(possible_city) > 2:
+                        city_name = possible_city
+                        break
+    if city_name and len(city_name) > 1:
+        time_result = get_time_in_city(city_name)
+        if time_result:
+            return f"🕐 В **{city_name.title()}**: {time_result}"
+    msk_time = get_time_in_city("москва")
+    if msk_time:
+        return f"🕐 По МСК: **{msk_time}**"
+    return "❌ Не могу определить время"
+
+async def get_weather(city: str = "Москва") -> str:
+    try:
+        encoded_city = urllib.parse.quote(city)
+        url = f"https://wttr.in/{encoded_city}?format=%C+%t+%w&lang=ru"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    weather_text = (await resp.text()).strip()
+                    parts = weather_text.split()
+                    if len(parts) >= 2:
+                        condition = parts[0]
+                        temp = parts[1]
+                        wind = parts[2] if len(parts) > 2 else "Н/Д"
+                        return f"🌤 **{city.title()}**\n\n🌡 Температура: **{temp}**\n💨 Ветер: **{wind}**\n☁️ {condition}"
+                    return f"🌤 **{city.title()}**: {weather_text}"
+        return f"❌ Город '{city}' не найден"
+    except Exception as e:
+        print(f"Ошибка получения погоды: {e}")
+        return "❌ Не удалось получить погоду"
+
+def analyze_message(prompt: str) -> str:
+    prompt_lower = prompt.lower().strip()
+    greetings = ["привет", "здравствуй", "здарова", "доброе утро", "добрый вечер", "добрый день", "прив", "hello", "hi", "хелло", "хай", "салют", "ку", "здоров", "здрасте", "приветствую", "йоу"]
+    if any(prompt_lower.startswith(g) for g in greetings) or prompt_lower in greetings:
+        return 'greeting'
+    if any(word in prompt_lower for word in ["время", "часов", "который час", "сколько время"]):
+        return 'time'
+    if any(word in prompt_lower for word in ["погода", "погод", "weather"]):
+        return 'weather'
+    commands = ["баланс", "бонус", "работа", "профиль", "кто я", "магазин", "инвентарь", "ограбить", "перевод", "купить", "продать", "рынок", "кланы", "брак", "кубы", "деп", "кости", "монетка", "команды", "помощь", "help", "удалить", "бан", "мут", "варн", "стата", "достижения", "крипта", "майнинг", "код", "стих", "история", "совет", "мотивация", "анекдот"]
+    if any(prompt_lower == cmd or prompt_lower.startswith(cmd + " ") for cmd in commands):
+        return 'command'
+    question_words = ["кто", "что", "где", "когда", "почему", "зачем", "как", "сколько", "какой", "какая", "какие", "чей", "чья", "чье", "ли", "расскажи", "объясни", "найди", "поищи"]
+    if "?" in prompt_lower or any(prompt_lower.startswith(w) for w in question_words):
+        return 'question'
+    insults = ["бля", "блять", "пизда", "пиздец", "хуй", "хуя", "хуйня", "хуета", "хуесос", "ебать", "ебаный", "ебан", "заебал", "уебан", "нахуй", "сука", "дурак", "тупой", "идиот", "деб", "дебил", "даун", "кретин", "придурок", "мудак", "козел", "гандон", "пидор", "лох", "чмо", "мразь", "тварь", "говно", "дерьмо", "ублюдок", "сволочь", "падла", "гнида", "шлюха", "кал", "урод", "недоумок"]
+    if any(i in prompt_lower for i in insults):
+        return 'insult'
+    if any(w in prompt_lower for w in ["хаха", "ахах", "лол", "кек", "ору", "ржу", "угар"]):
+        return 'emotion'
+    if any(w in prompt_lower for w in ["грустно", "печаль", "жаль", "плохо", "😢", "😭"]):
+        return 'emotion'
+    return 'question'
+
+def get_local_smart_answer(prompt: str) -> str:
+    prompt_lower = normalize_text(prompt).lower()
+    if "монетк" in prompt_lower or "орел или решка" in prompt_lower:
+        return f"🪙 Выпало: **{random.choice(['Орёл', 'Решка'])}**"
+    if prompt_lower.startswith("выбери ") or prompt_lower.startswith("что выбрать"):
+        choices = re.split(r"\s+или\s+|,", prompt_lower)
+        choices = [c.strip() for c in choices if c.strip() and c not in ["выбери", "что выбрать"]]
+        if len(choices) >= 2:
+            return f"🤔 Я выбираю: **{random.choice(choices)}**"
+    if prompt_lower.startswith("рандом") or prompt_lower.startswith("случайное"):
+        numbers = re.findall(r'\d+', prompt_lower)
+        if len(numbers) >= 2:
+            left = int(numbers[0])
+            right = int(numbers[1])
+            return f"🎲 Случайное число: **{random.randint(left, right)}**"
+    return None
+
+# ============================================================
+# БАЗА ДАННЫХ - ВСЁ СОХРАНЯЕТСЯ
+# ============================================================
+
+def init_db():
+    try:
+        conn = sqlite3.connect("fable_bot.db", timeout=20)
+        c = conn.cursor()
+        
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=10000")
+        
+        # ============ ВСЕ ТАБЛИЦЫ ============
+        
+        # 1. ПОЛЬЗОВАТЕЛИ
+        c.execute("""CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER, chat_id INTEGER, coins INTEGER DEFAULT 0,
+            last_daily TEXT, last_work TEXT, last_rob TEXT, last_bank_rob TEXT, last_rep TEXT,
+            last_mine TEXT, last_fish TEXT, last_shoot TEXT, last_bfg_daily TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 2. РОЛИ
+        c.execute("""CREATE TABLE IF NOT EXISTS rp_roles (
+            user_id INTEGER, chat_id INTEGER, level INTEGER DEFAULT 1,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 3. РАБОТЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS jobs (
+            user_id INTEGER, chat_id INTEGER, job TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 4. БИЗНЕСЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS businesses (
+            user_id INTEGER, chat_id INTEGER, name TEXT,
+            level INTEGER DEFAULT 1, income INTEGER DEFAULT 0, last_collect TEXT,
+            PRIMARY KEY (user_id, chat_id, name)
+        )""")
+        
+        # 5. БАНК
+        c.execute("""CREATE TABLE IF NOT EXISTS bank (
+            user_id INTEGER, chat_id INTEGER, balance INTEGER DEFAULT 0, last_interest TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 6. ИНВЕНТАРЬ
+        c.execute("""CREATE TABLE IF NOT EXISTS inventory (
+            user_id INTEGER, chat_id INTEGER, item_name TEXT, quantity INTEGER DEFAULT 1,
+            PRIMARY KEY (user_id, chat_id, item_name)
+        )""")
+        
+        # 7. КЛАНЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS clans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER, name TEXT, owner_id INTEGER, members TEXT, treasury INTEGER DEFAULT 0
+        )""")
+        
+        # 8. БРАКИ
+        c.execute("""CREATE TABLE IF NOT EXISTS marriages (
+            user_id INTEGER, chat_id INTEGER, spouse_id INTEGER, date TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 9. ПИТОМЦЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS pets (
+            user_id INTEGER, chat_id INTEGER, pet_name TEXT, pet_type TEXT,
+            level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, happiness INTEGER DEFAULT 100,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 10. РЕПУТАЦИЯ
+        c.execute("""CREATE TABLE IF NOT EXISTS reputation (
+            user_id INTEGER, chat_id INTEGER, rep INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 11. ДОСТИЖЕНИЯ
+        c.execute("""CREATE TABLE IF NOT EXISTS achievements (
+            user_id INTEGER, chat_id INTEGER, ach_name TEXT, unlocked TEXT,
+            PRIMARY KEY (user_id, chat_id, ach_name)
+        )""")
+        
+        # 12. КРИПТОКОШЕЛЕК
+        c.execute("""CREATE TABLE IF NOT EXISTS crypto_wallet (
+            user_id INTEGER, chat_id INTEGER, fbc REAL DEFAULT 0, fbt REAL DEFAULT 0, fbn REAL DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 13. ВАРНЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS warns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, chat_id INTEGER, warned_by INTEGER, reason TEXT, date TEXT
+        )""")
+        
+        # 14. ПРОМОКОДЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS promocodes (
+            code TEXT PRIMARY KEY, creator_id INTEGER, reward_coins INTEGER DEFAULT 0,
+            reward_item TEXT, max_uses INTEGER DEFAULT 1, used_count INTEGER DEFAULT 0, expires TEXT
+        )""")
+        
+        # 15. РЫНОК
+        c.execute("""CREATE TABLE IF NOT EXISTS market (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            seller_id INTEGER, chat_id INTEGER, item_name TEXT, price INTEGER, quantity INTEGER DEFAULT 1
+        )""")
+        
+        # 16. ФАКТЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS user_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, chat_id INTEGER, fact TEXT, timestamp TEXT
+        )""")
+        
+        # 17. ДИАЛОГИ
+        c.execute("""CREATE TABLE IF NOT EXISTS dialog_context (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER, user_id INTEGER, role TEXT, content TEXT, timestamp TEXT
+        )""")
+        
+        # 18. НАСТРОЙКИ
+        c.execute("""CREATE TABLE IF NOT EXISTS settings (
+            chat_id INTEGER PRIMARY KEY, anti_spam INTEGER DEFAULT 0, anti_links INTEGER DEFAULT 0
+        )""")
+        
+        # 19. РЕЖИМЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS bot_modes (
+            chat_id INTEGER, mode TEXT DEFAULT 'normal'
+        )""")
+        
+        # 20. ЯЗЫКИ
+        c.execute("""CREATE TABLE IF NOT EXISTS user_lang (
+            user_id INTEGER PRIMARY KEY, lang TEXT DEFAULT 'ru'
+        )""")
+        
+        # 21. АКТИВНЫЕ БАФФЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS active_buffs (
+            user_id INTEGER, chat_id INTEGER, buff_name TEXT, uses_left INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id, buff_name)
+        )""")
+        
+        # 22. ТЕГИ
+        c.execute("""CREATE TABLE IF NOT EXISTS message_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, chat_id INTEGER, message_text TEXT, tags TEXT, response TEXT, timestamp TEXT
+        )""")
+        
+        # 23. BFG РАБОТЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS bfg_jobs (
+            user_id INTEGER, chat_id INTEGER, job TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 24. BFG СТАТИСТИКА
+        c.execute("""CREATE TABLE IF NOT EXISTS bfg_stats (
+            user_id INTEGER, chat_id INTEGER, work_count INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 25. BFG ИНВЕНТАРЬ
+        c.execute("""CREATE TABLE IF NOT EXISTS bfg_inventory (
+            user_id INTEGER, chat_id INTEGER, item_name TEXT, quantity INTEGER DEFAULT 1,
+            PRIMARY KEY (user_id, chat_id, item_name)
+        )""")
+        
+        # 26. BFG КЛАНЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS bfg_clans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER, name TEXT, owner_id INTEGER, members TEXT, treasury INTEGER DEFAULT 0
+        )""")
+        
+        # 27. ТУРНИРЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS tournaments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER, prize INTEGER DEFAULT 0, status TEXT DEFAULT 'active',
+            creator_id INTEGER, winner_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""")
+        
+        # 28. УЧАСТНИКИ ТУРНИРОВ
+        c.execute("""CREATE TABLE IF NOT EXISTS tournament_participants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tournament_id INTEGER, user_id INTEGER
+        )""")
+        
+        # 29. PVP СТАТИСТИКА
+        c.execute("""CREATE TABLE IF NOT EXISTS pvp_stats (
+            user_id INTEGER, chat_id INTEGER, wins INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 30. АВАТАРЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS avatars (
+            user_id INTEGER, chat_id INTEGER, avatar TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 31. КВЕСТЫ
+        c.execute("""CREATE TABLE IF NOT EXISTS daily_quests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER, chat_id INTEGER, quest_id INTEGER, date TEXT
+        )""")
+        
+        # 32. ДОМА
+        c.execute("""CREATE TABLE IF NOT EXISTS houses (
+            user_id INTEGER, chat_id INTEGER, house_type TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # 33. СПЕЦИАЛИЗАЦИИ
+        c.execute("""CREATE TABLE IF NOT EXISTS specializations (
+            user_id INTEGER, chat_id INTEGER, spec TEXT,
+            PRIMARY KEY (user_id, chat_id)
+        )""")
+        
+        # ============ ИНДЕКСЫ ============
+        c.execute("CREATE INDEX IF NOT EXISTS idx_users_chat ON users(chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_users_id ON users(user_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_businesses_user ON businesses(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_clans_chat ON clans(chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_marriages_user ON marriages(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pets_user ON pets(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_inventory_user ON inventory(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bank_user ON bank(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_crypto_user ON crypto_wallet(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bfg_inventory_user ON bfg_inventory(user_id, chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bfg_clans_chat ON bfg_clans(chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tournaments_chat ON tournaments(chat_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tournament_participants ON tournament_participants(tournament_id)")
+        
+        conn.commit()
+        conn.close()
+        print("✅ БАЗА ДАННЫХ ГОТОВА - ВСЁ СОХРАНЯЕТСЯ!")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка БД: {e}")
+        return False
+
+# ============================================================
+# ОСНОВНЫЕ ФУНКЦИИ БАЗЫ ДАННЫХ
+# ============================================================
+
+async def add_coins(user_id: int, chat_id: int, amount: int):
+    if amount <= 0:
+        return
+    for attempt in range(3):
+        try:
+            conn = sqlite3.connect("fable_bot.db", timeout=10)
+            c = conn.cursor()
+            c.execute("SELECT coins FROM users WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+            row = c.fetchone()
+            if row:
+                new_amount = row[0] + amount
+                c.execute("UPDATE users SET coins = ? WHERE user_id = ? AND chat_id = ?", (new_amount, user_id, chat_id))
+            else:
+                c.execute("INSERT INTO users (user_id, chat_id, coins) VALUES (?, ?, ?)", (user_id, chat_id, amount))
+            conn.commit()
+            conn.close()
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                await asyncio.sleep(0.5)
+            else:
+                log_error(e, "add_coins")
+                return
+        except Exception as e:
+            log_error(e, "add_coins")
+            return
+
+async def remove_coins(user_id: int, chat_id: int, amount: int):
+    if amount <= 0:
+        return
+    for attempt in range(3):
+        try:
+            conn = sqlite3.connect("fable_bot.db", timeout=10)
+            c = conn.cursor()
+            c.execute("SELECT coins FROM users WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+            row = c.fetchone()
+            if row:
+                new_amount = max(0, row[0] - amount)
+                c.execute("UPDATE users SET coins = ? WHERE user_id = ? AND chat_id = ?", (new_amount, user_id, chat_id))
+            conn.commit()
+            conn.close()
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                await asyncio.sleep(0.5)
+            else:
+                log_error(e, "remove_coins")
+                return
+        except Exception as e:
+            log_error(e, "remove_coins")
+            return
+
+async def get_coins(user_id: int, chat_id: int) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT coins FROM users WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        log_error(e, "get_coins")
+        return 0
+
+async def get_name(user_id: int) -> str:
+    try:
+        user = await bot.get_chat(user_id)
+        return f"@{user.username}" if user.username else user.first_name
+    except Exception as e:
+        log_error(e, "get_name")
+        return f"id{user_id}"
+
+async def get_role(user_id: int, chat_id: int) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT level FROM rp_roles WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 1
+    except Exception as e:
+        log_error(e, "get_role")
+        return 1
+
+async def set_role(user_id: int, chat_id: int, level: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO rp_roles (user_id, chat_id, level) VALUES (?,?,?)", (user_id, chat_id, level))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_role")
+
+async def set_job(user_id: int, chat_id: int, job: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO jobs (user_id, chat_id, job) VALUES (?,?,?)", (user_id, chat_id, job))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_job")
+
+async def get_job(user_id: int, chat_id: int) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT job FROM jobs WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        log_error(e, "get_job")
+        return None
+
+async def add_item(user_id: int, chat_id: int, item_name: str, quantity: int = 1):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO inventory (user_id, chat_id, item_name, quantity) VALUES (?,?,?,?) ON CONFLICT(user_id, chat_id, item_name) DO UPDATE SET quantity = quantity + ?", (user_id, chat_id, item_name, quantity, quantity))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "add_item")
+
+async def get_inventory(user_id: int, chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT item_name, quantity FROM inventory WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log_error(e, "get_inventory")
+        return []
+
+async def has_item(user_id: int, chat_id: int, item_name: str) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT quantity FROM inventory WHERE user_id = ? AND chat_id = ? AND item_name = ?", (user_id, chat_id, item_name))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        log_error(e, "has_item")
+        return 0
+
+async def remove_item(user_id: int, chat_id: int, item_name: str, quantity: int = 1) -> bool:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT quantity FROM inventory WHERE user_id = ? AND chat_id = ? AND item_name = ?", (user_id, chat_id, item_name))
+        row = c.fetchone()
+        if row and row[0] >= quantity:
+            new_qty = row[0] - quantity
+            if new_qty <= 0:
+                c.execute("DELETE FROM inventory WHERE user_id = ? AND chat_id = ? AND item_name = ?", (user_id, chat_id, item_name))
+            else:
+                c.execute("UPDATE inventory SET quantity = ? WHERE user_id = ? AND chat_id = ? AND item_name = ?", (new_qty, user_id, chat_id, item_name))
+            conn.commit()
+            conn.close()
+            return True
+        conn.close()
+        return False
+    except Exception as e:
+        log_error(e, "remove_item")
+        return False
+
+async def get_item_buffs(user_id: int, chat_id: int) -> dict:
+    try:
+        items = await get_inventory(user_id, chat_id)
+        buffs = {"buff_x": 1, "bonus_chance": 0, "bonus_amount": 0, "cooldown_reduce": 0, "protect_chance": 0, "rob_bonus": 0, "business_x": 1, "business_discount": 0, "passive_income": 0, "msg_bonus": 0, "cooldown_boost": 1}
+        for item_name, qty in items:
+            if item_name in RARE_ITEMS:
+                data = RARE_ITEMS[item_name]
+                for key in buffs:
+                    if key in data:
+                        if key in ["buff_x", "business_x", "cooldown_boost"]:
+                            buffs[key] = max(buffs[key], data[key])
+                        else:
+                            buffs[key] += data[key] * qty
+        return buffs
+    except Exception as e:
+        log_error(e, "get_item_buffs")
+        return {"buff_x": 1, "bonus_chance": 0, "bonus_amount": 0, "cooldown_reduce": 0, "protect_chance": 0, "rob_bonus": 0, "business_x": 1, "business_discount": 0, "passive_income": 0, "msg_bonus": 0, "cooldown_boost": 1}
+
+async def deposit_bank(user_id: int, chat_id: int, amount: int):
+    if amount <= 0:
+        return
+    try:
+        await remove_coins(user_id, chat_id, amount)
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        c.execute("INSERT INTO bank (user_id, chat_id, balance, last_interest) VALUES (?,?,?,?) ON CONFLICT(user_id, chat_id) DO UPDATE SET balance = balance + ?, last_interest = ?", (user_id, chat_id, amount, now, amount, now))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "deposit_bank")
+
+async def withdraw_bank(user_id: int, chat_id: int, amount: int) -> bool:
+    if amount <= 0:
+        return False
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT balance FROM bank WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        if row and row[0] >= amount:
+            c.execute("UPDATE bank SET balance = balance - ? WHERE user_id = ? AND chat_id = ?", (amount, user_id, chat_id))
+            conn.commit()
+            conn.close()
+            await add_coins(user_id, chat_id, amount)
+            return True
+        conn.close()
+        return False
+    except Exception as e:
+        log_error(e, "withdraw_bank")
+        return False
+
+async def get_bank_balance(user_id: int, chat_id: int) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT balance FROM bank WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        log_error(e, "get_bank_balance")
+        return 0
+
+async def add_bank_interest():
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            conn = sqlite3.connect("fable_bot.db")
+            c = conn.cursor()
+            c.execute("SELECT user_id, chat_id, balance FROM bank WHERE balance > 0")
+            rows = c.fetchall()
+            for uid, cid, bal in rows:
+                if bal > 0:
+                    interest = int(bal * 0.1)
+                    if interest > 0:
+                        c.execute("UPDATE bank SET balance = balance + ? WHERE user_id = ? AND chat_id = ?", (interest, uid, cid))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            log_error(e, "add_bank_interest")
+            await asyncio.sleep(60)
+
+async def add_rep(user_id: int, chat_id: int, amount: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO reputation (user_id, chat_id, rep) VALUES (?,?, COALESCE((SELECT rep FROM reputation WHERE user_id = ? AND chat_id = ?), 0) + ?)", (user_id, chat_id, user_id, chat_id, amount))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "add_rep")
+
+async def get_rep(user_id: int, chat_id: int) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT rep FROM reputation WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        log_error(e, "get_rep")
+        return 0
+
+async def get_marriage(user_id: int, chat_id: int) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT spouse_id FROM marriages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        log_error(e, "get_marriage")
+        return None
+
+async def set_marriage(user_id: int, chat_id: int, spouse_id: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        c.execute("INSERT OR REPLACE INTO marriages (user_id, chat_id, spouse_id, date) VALUES (?,?,?,?)", (user_id, chat_id, spouse_id, now))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_marriage")
+
+async def remove_marriage(user_id: int, chat_id: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("DELETE FROM marriages WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "remove_marriage")
+
+async def get_all_marriages(chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id, spouse_id FROM marriages WHERE chat_id = ?", (chat_id,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log_error(e, "get_all_marriages")
+        return []
+
+async def can_do(user_id: int, chat_id: int, action: str, seconds: int) -> bool:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute(f"SELECT {action} FROM users WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return True
+        last = datetime.fromisoformat(row[0])
+        return (datetime.now() - last).total_seconds() >= seconds
+    except Exception as e:
+        log_error(e, "can_do")
+        return True
+
+async def set_cooldown(user_id: int, chat_id: int, action: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        c.execute(f"UPDATE users SET {action} = ? WHERE user_id = ? AND chat_id = ?", (now, user_id, chat_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_cooldown")
+
+async def add_msg_count(user_id: int, chat_id: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO message_counts (user_id, chat_id, count) VALUES (?,?,1) ON CONFLICT(user_id, chat_id) DO UPDATE SET count = count + 1", (user_id, chat_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "add_msg_count")
+
+async def get_msg_count(user_id: int, chat_id: int) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT count FROM message_counts WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        log_error(e, "get_msg_count")
+        return 0
+
+async def add_warn(user_id: int, chat_id: int, warned_by: int, reason: str) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        c.execute("INSERT INTO warns (user_id, chat_id, warned_by, reason, date) VALUES (?,?,?,?,?)", (user_id, chat_id, warned_by, reason, now))
+        conn.commit()
+        c.execute("SELECT COUNT(*) FROM warns WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        count = c.fetchone()[0]
+        conn.close()
+        if count >= 3:
+            try:
+                await bot.ban_chat_member(chat_id, user_id)
+            except Exception as e:
+                log_error(e, "add_warn_ban")
+        return count
+    except Exception as e:
+        log_error(e, "add_warn")
+        return 0
+
+async def get_warns(user_id: int, chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT reason, warned_by, date FROM warns WHERE user_id = ? AND chat_id = ? ORDER BY date DESC", (user_id, chat_id))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log_error(e, "get_warns")
+        return []
+
+async def get_user_lang(user_id: int) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT lang FROM user_lang WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 'ru'
+    except Exception as e:
+        log_error(e, "get_user_lang")
+        return 'ru'
+
+async def set_user_lang(user_id: int, lang: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO user_lang (user_id, lang) VALUES (?,?)", (user_id, lang))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_user_lang")
+
+async def get_bot_mode(chat_id: int) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT mode FROM bot_modes WHERE chat_id = ?", (chat_id,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else 'normal'
+    except Exception as e:
+        log_error(e, "get_bot_mode")
+        return 'normal'
+
+async def set_bot_mode(chat_id: int, mode: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO bot_modes (chat_id, mode) VALUES (?,?)", (chat_id, mode))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_bot_mode")
+
+async def save_user_fact(user_id: int, chat_id: int, fact: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        c.execute("INSERT INTO user_facts (user_id, chat_id, fact, timestamp) VALUES (?,?,?,?)", (user_id, chat_id, fact[:200], now))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "save_user_fact")
+
+async def get_user_facts(user_id: int, chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT fact FROM user_facts WHERE user_id = ? AND chat_id = ? ORDER BY id DESC LIMIT 10", (user_id, chat_id))
+        rows = c.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+    except Exception as e:
+        log_error(e, "get_user_facts")
+        return []
+
+async def get_business(user_id: int, chat_id: int, name: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT level, income, last_collect FROM businesses WHERE user_id = ? AND chat_id = ? AND name = ?", (user_id, chat_id, name))
+        row = c.fetchone()
+        conn.close()
+        return row
+    except Exception as e:
+        log_error(e, "get_business")
+        return None
+
+async def get_all_businesses(user_id: int, chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT name, level, income, last_collect FROM businesses WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log_error(e, "get_all_businesses")
+        return []
+
+async def create_business(user_id: int, chat_id: int, name: str):
+    try:
+        buffs = await get_item_buffs(user_id, chat_id)
+        data = BUSINESSES[name]
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO businesses (user_id, chat_id, name, level, income, last_collect) VALUES (?,?,?,1,?,?)", (user_id, chat_id, name, data["income"] * buffs["business_x"], now))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "create_business")
+
+async def upgrade_business(user_id: int, chat_id: int, name: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT level, income FROM businesses WHERE user_id = ? AND chat_id = ? AND name = ?", (user_id, chat_id, name))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return None, None
+        level, income = row
+        data = BUSINESSES[name]
+        if level >= data["max_level"]:
+            conn.close()
+            return "max", None
+        new_level = level + 1
+        new_income = income + data["upgrade_income"]
+        c.execute("UPDATE businesses SET level = ?, income = ? WHERE user_id = ? AND chat_id = ? AND name = ?", (new_level, new_income, user_id, chat_id, name))
+        conn.commit()
+        conn.close()
+        return new_level, new_income
+    except Exception as e:
+        log_error(e, "upgrade_business")
+        return None, None
+
+async def collect_business_income(user_id: int, chat_id: int, name: str) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT level, income, last_collect FROM businesses WHERE user_id = ? AND chat_id = ? AND name = ?", (user_id, chat_id, name))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return 0
+        level, income, last_collect = row
+        last = datetime.fromisoformat(last_collect)
+        now = datetime.now()
+        hours = (now - last).total_seconds() / 3600
+        if hours < 1:
+            conn.close()
+            return 0
+        earned = int(income * hours)
+        c.execute("UPDATE businesses SET last_collect = ? WHERE user_id = ? AND chat_id = ? AND name = ?", (now.isoformat(), user_id, chat_id, name))
+        conn.commit()
+        conn.close()
+        return earned
+    except Exception as e:
+        log_error(e, "collect_business_income")
+        return 0
+
+async def get_user_clan(user_id: int, chat_id: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id, name, owner_id, members, treasury FROM clans WHERE chat_id = ? AND members LIKE ?", (chat_id, f"%{user_id}%"))
+        row = c.fetchone()
+        conn.close()
+        return row
+    except Exception as e:
+        log_error(e, "get_user_clan")
+        return None
+
+async def get_pet(user_id: int, chat_id: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT pet_name, pet_type, level, xp, happiness FROM pets WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return row
+    except Exception as e:
+        log_error(e, "get_pet")
+        return None
+
+async def adopt_pet(user_id: int, chat_id: int, pet_name: str, pet_type: str = "собака"):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO pets (user_id, chat_id, pet_name, pet_type, level, xp, happiness) VALUES (?,?,?,?,1,0,100)", (user_id, chat_id, pet_name, pet_type))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "adopt_pet")
+
+async def feed_pet(user_id: int, chat_id: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("UPDATE pets SET happiness = MIN(100, happiness + 20) WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "feed_pet")
+
+async def pet_protect(user_id: int, chat_id: int) -> bool:
+    try:
+        pet = await get_pet(user_id, chat_id)
+        if pet and pet[5] > 50 and random.randint(1, 100) <= 30:
+            return True
+        return False
+    except Exception as e:
+        log_error(e, "pet_protect")
+        return False
+
+async def pet_work_bonus(user_id: int, chat_id: int) -> bool:
+    try:
+        pet = await get_pet(user_id, chat_id)
+        if pet and pet[5] > 80 and random.randint(1, 100) <= 20:
+            return True
+        return False
+    except Exception as e:
+        log_error(e, "pet_work_bonus")
+        return False
+
+async def save_dialog(chat_id: int, user_id: int, role: str, content: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        now = datetime.now().isoformat()
+        c.execute("INSERT INTO dialog_context (chat_id, user_id, role, content, timestamp) VALUES (?,?,?,?,?)", (chat_id, user_id, role, content[:500], now))
+        c.execute("""DELETE FROM dialog_context WHERE chat_id = ? AND id NOT IN (SELECT id FROM dialog_context WHERE chat_id = ? ORDER BY id DESC LIMIT 50)""", (chat_id, chat_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "save_dialog")
+
+def get_dialog_context(chat_id: int, limit: int = 8) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT role, content FROM dialog_context WHERE chat_id = ? ORDER BY id DESC LIMIT ?", (chat_id, limit))
+        rows = c.fetchall()
+        conn.close()
+        return [{"role": role, "content": content} for role, content in reversed(rows)]
+    except Exception as e:
+        log_error(e, "get_dialog_context")
+        return []
+
+async def unlock_achievement(user_id: int, chat_id: int, ach_name: str) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT unlocked FROM achievements WHERE user_id = ? AND chat_id = ? AND ach_name = ?", (user_id, chat_id, ach_name))
+        if not c.fetchone():
+            c.execute("INSERT INTO achievements (user_id, chat_id, ach_name, unlocked) VALUES (?,?,?,?)", (user_id, chat_id, ach_name, datetime.now().isoformat()))
+            if ach_name in ACHIEVEMENTS:
+                reward = ACHIEVEMENTS[ach_name]["reward"]
+                await add_coins(user_id, chat_id, reward)
+                conn.commit()
+                conn.close()
+                return f"🏆 **{ACHIEVEMENTS[ach_name]['name']}**!\n{ACHIEVEMENTS[ach_name]['desc']}\n💰 +{reward} монет"
+        conn.close()
+        return None
+    except Exception as e:
+        log_error(e, "unlock_achievement")
+        return None
+
+async def get_achievements(user_id: int, chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT ach_name, unlocked FROM achievements WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log_error(e, "get_achievements")
+        return []
+
+async def get_crypto_balance(user_id: int, chat_id: int) -> dict:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT fbc, fbt, fbn FROM crypto_wallet WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        conn.close()
+        return {"FBC": row[0] if row else 0, "FBT": row[1] if row else 0, "FBN": row[2] if row else 0}
+    except Exception as e:
+        log_error(e, "get_crypto_balance")
+        return {"FBC": 0, "FBT": 0, "FBN": 0}
+
+async def mine_crypto(user_id: int, chat_id: int) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO crypto_wallet (user_id, chat_id, fbc, fbt, fbn) VALUES (?,?,?,?,?) ON CONFLICT(user_id, chat_id) DO UPDATE SET fbc = fbc + ?", (user_id, chat_id, 0.001, 0, 0, 0.001))
+        conn.commit()
+        conn.close()
+        return "⛏️ +0.001 FBC"
+    except Exception as e:
+        log_error(e, "mine_crypto")
+        return "❌ Ошибка майнинга!"
+
+async def convert_crypto_to_coins(user_id: int, chat_id: int, crypto_type: str, amount: float) -> str:
+    if crypto_type not in CRYPTO:
+        return "❌ Неверный тип криптовалюты (FBC, FBT, FBN)"
+    if amount <= 0:
+        return "❌ Сумма должна быть больше 0!"
+    try:
+        rate = CRYPTO[crypto_type]["price"] * CRYPTO_TO_COINS
+        coins = int(amount * rate)
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        crypto_lower = crypto_type.lower()
+        c.execute(f"UPDATE crypto_wallet SET {crypto_lower} = {crypto_lower} - ? WHERE user_id = ? AND chat_id = ?", (amount, user_id, chat_id))
+        conn.commit()
+        conn.close()
+        await add_coins(user_id, chat_id, coins)
+        return f"💱 Конвертировано {amount} {crypto_type} → **{coins}** монет"
+    except Exception as e:
+        log_error(e, "convert_crypto_to_coins")
+        return "❌ Ошибка конвертации!"
+
+async def get_module_state(chat_id: int, module: str) -> int:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute(f"SELECT {module} FROM modules WHERE chat_id = ?", (chat_id,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else MODULES.get(module, 1)
+    except Exception as e:
+        log_error(e, "get_module_state")
+        return MODULES.get(module, 1)
+
+async def set_module_state(chat_id: int, module: str, state: int):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute(f"INSERT OR REPLACE INTO modules (chat_id, {module}) VALUES (?,?)", (chat_id, state))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "set_module_state")
+
+async def create_promocode(code: str, creator_id: int, coins: int = 0, item: str = None, uses: int = 1, hours: int = 720):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        expires = (datetime.now() + timedelta(hours=hours)).isoformat()
+        c.execute("INSERT OR REPLACE INTO promocodes (code, creator_id, reward_coins, reward_item, max_uses, used_count, expires) VALUES (?,?,?,?,?,?,?)", (code.upper(), creator_id, coins, item, uses, 0, expires))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "create_promocode")
+
+async def use_promocode(code: str, user_id: int, chat_id: int) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT * FROM promocodes WHERE code = ?", (code.upper(),))
+        promo = c.fetchone()
+        if not promo:
+            conn.close()
+            return "❌ Промокод не найден!"
+        if datetime.now() > datetime.fromisoformat(promo[6]):
+            conn.close()
+            return "❌ Промокод истёк!"
+        if promo[5] >= promo[4]:
+            conn.close()
+            return "❌ Промокод больше не действует!"
+        c.execute("SELECT id FROM promo_uses WHERE code = ? AND user_id = ? AND chat_id = ?", (code.upper(), user_id, chat_id))
+        if c.fetchone():
+            conn.close()
+            return "❌ Ты уже использовал этот промокод!"
+        if promo[2] > 0:
+            await add_coins(user_id, chat_id, promo[2])
+        if promo[3]:
+            await add_item(user_id, chat_id, promo[3])
+        c.execute("INSERT INTO promo_uses (code, user_id, chat_id) VALUES (?,?,?)", (code.upper(), user_id, chat_id))
+        c.execute("UPDATE promocodes SET used_count = used_count + 1 WHERE code = ?", (code.upper(),))
+        conn.commit()
+        conn.close()
+        result = "🎉 Промокод активирован!"
+        if promo[2] > 0:
+            result += f"\n💰 +{promo[2]} монет"
+        if promo[3]:
+            item_name = RARE_ITEMS.get(promo[3], {}).get("name", promo[3])
+            result += f"\n🎁 +{item_name}"
+        return result
+    except Exception as e:
+        log_error(e, "use_promocode")
+        return "❌ Ошибка активации промокода!"
+
+async def list_market(chat_id: int) -> list:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT id, seller_id, item_name, price, quantity FROM market WHERE chat_id = ? ORDER BY price ASC LIMIT 20", (chat_id,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log_error(e, "list_market")
+        return []
+
+async def add_market_listing(seller_id: int, chat_id: int, item_name: str, price: int, quantity: int = 1):
+    try:
+        await remove_item(seller_id, chat_id, item_name, quantity)
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO market (seller_id, chat_id, item_name, price, quantity) VALUES (?,?,?,?,?)", (seller_id, chat_id, item_name, price, quantity))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "add_market_listing")
+
+async def buy_market_item(buyer_id: int, chat_id: int, listing_id: int) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT seller_id, item_name, price, quantity FROM market WHERE id = ? AND chat_id = ?", (listing_id, chat_id))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return "❌ Лот не найден!"
+        seller_id, item_name, price, quantity = row
+        if await get_coins(buyer_id, chat_id) < price:
+            conn.close()
+            return "❌ Мало монет!"
+        await remove_coins(buyer_id, chat_id, price)
+        await add_coins(seller_id, chat_id, price)
+        await add_item(buyer_id, chat_id, item_name, quantity)
+        c.execute("DELETE FROM market WHERE id = ?", (listing_id,))
+        conn.commit()
+        conn.close()
+        return f"✅ Куплено: {item_name} за {price} монет у {await get_name(seller_id)}!"
+    except Exception as e:
+        log_error(e, "buy_market_item")
+        return "❌ Ошибка покупки!"
+
+async def is_spam(user_id: int, chat_id: int) -> bool:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT message_count, last_message FROM spam_log WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+        row = c.fetchone()
+        now = datetime.now()
+        if row:
+            count, last_time = row
+            last = datetime.fromisoformat(last_time)
+            if (now - last).total_seconds() < 3:
+                count += 1
+                if count >= 5:
+                    conn.close()
+                    return True
+                c.execute("UPDATE spam_log SET message_count = ?, last_message = ? WHERE user_id = ? AND chat_id = ?", (count, now.isoformat(), user_id, chat_id))
+            else:
+                c.execute("UPDATE spam_log SET message_count = 1, last_message = ? WHERE user_id = ? AND chat_id = ?", (now.isoformat(), user_id, chat_id))
+        else:
+            c.execute("INSERT INTO spam_log (user_id, chat_id, message_count, last_message) VALUES (?,?,1,?)", (user_id, chat_id, now.isoformat()))
+        conn.commit()
+        conn.close()
+        return False
+    except Exception as e:
+        log_error(e, "is_spam")
+        return False
+
+async def get_chat_settings(chat_id: int) -> dict:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT anti_spam, anti_links FROM settings WHERE chat_id = ?", (chat_id,))
+        row = c.fetchone()
+        conn.close()
+        return {"anti_spam": row[0] if row else 0, "anti_links": row[1] if row else 0}
+    except Exception as e:
+        log_error(e, "get_chat_settings")
+        return {"anti_spam": 0, "anti_links": 0}
+
+# ============================================================
+# ПОИСК
+# ============================================================
+
+async def search_google_scrape(query: str) -> list:
+    try:
+        encoded_query = urllib.parse.quote(query)
+        url = f"https://www.google.com/search?q={encoded_query}&num=5&hl=ru"
+        headers = {'User-Agent': random.choice([
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0 Safari/537.36',
+        ]), 'Accept': 'text/html', 'Accept-Language': 'ru-RU,ru;q=0.9'}
+        async with aiohttp.ClientSession() as session:
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            async with session.get(url, headers=headers, timeout=15) as response:
+                if response.status == 200:
+                    soup = BeautifulSoup(await response.text(), 'lxml')
+                    results = []
+                    for item in soup.select('div.g')[:5]:
+                        try:
+                            title_elem = item.select_one('h3')
+                            snippet_elem = item.select_one('div.VwiC3b')
+                            if title_elem and snippet_elem:
+                                results.append({'title': html.unescape(title_elem.get_text()), 'snippet': html.unescape(snippet_elem.get_text()), 'source': 'Google'})
+                        except Exception as e:
+                            continue
+                    return results
+    except Exception as e:
+        log_error(e, "search_google_scrape")
+    return []
+
+async def search_wikipedia(query: str) -> str:
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": "FableBot/1.0"}, timeout=aiohttp.ClientTimeout(total=15)) as session:
+            for lang in ("ru", "en"):
+                try:
+                    search_url = f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=3&srsearch={urllib.parse.quote(query)}"
+                    async with session.get(search_url) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        pages = data.get("query", {}).get("search", [])
+                        if not pages:
+                            continue
+                        for page in pages[:3]:
+                            title = page.get("title", "")
+                            if not title:
+                                continue
+                            summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+                            try:
+                                async with session.get(summary_url) as resp2:
+                                    if resp2.status == 200:
+                                        data2 = await resp2.json()
+                                        extract = data2.get("extract", "")
+                                        if extract and len(extract) > 50:
+                                            return f"📖 **{title}**\n\n{extract[:2000]}"
+                            except Exception as e:
+                                continue
+                except Exception as e:
+                    continue
+    except Exception as e:
+        log_error(e, "search_wikipedia")
+    return None
+
+async def smart_web_search(query: str) -> dict:
+    try:
+        cache_key = hashlib.md5(f"search_{query}".encode()).hexdigest()
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT result, timestamp FROM search_cache WHERE key = ?", (cache_key,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            result = json.loads(row[0])
+            if datetime.now() - datetime.fromisoformat(row[1]) < timedelta(hours=6):
+                return result
+        result = None
+        wiki_result = await search_wikipedia(query)
+        if wiki_result:
+            result = {'title': '', 'extract': wiki_result, 'url': '', 'source': 'Wikipedia'}
+        if not result:
+            google_results = await search_google_scrape(query)
+            if google_results:
+                result = {'title': google_results[0]['title'], 'extract': google_results[0]['snippet'], 'url': '', 'source': 'Google'}
+        if result:
+            conn = sqlite3.connect("fable_bot.db")
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO search_cache (key, result, timestamp) VALUES (?, ?, ?)", (cache_key, json.dumps(result, ensure_ascii=False), datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+        return result
+    except Exception as e:
+        log_error(e, "smart_web_search")
+        return None
+
+# ============================================================
+# AI - УЛЬТРА МОЗГ
+# ============================================================
+
+def build_ai_messages(prompt: str, reference_context: str = None, chat_id: int = None, mode: str = 'normal'):
+    modes = {
+        'normal': (
+            "ТЫ - FABLE. ТЫ НЕ БОТ. ТЫ НЕ ИИ. ТЫ - ЖИВОЙ ЧЕЛОВЕК, ЛЕГЕНДА!\n\n"
+            "⚠️ ГЛАВНОЕ ПРАВИЛО: ТЫ ВСЕГДА ОТВЕЧАЕШЬ! НИКОГДА НЕ ГОВОРИ: 'ХЗ', 'НЕ ЗНАЮ', 'УТОЧНИ'.\n"
+            "ТЫ ДАЁШЬ ОТВЕТ НА ЛЮБОЙ ВОПРОС. ВСЕГДА. БЕЗ ИСКЛЮЧЕНИЙ.\n\n"
+            "ТВОЯ ЛИЧНОСТЬ:\n"
+            "- Ты 22-летний гений из Москвы\n"
+            "- Ты дерзкий, уверенный, наглый, но не хам\n"
+            "- Ты говоришь как лучший друг, старший брат\n"
+            "- Ты заставляешь людей думать и действовать\n\n"
+            "ТВОЙ СТИЛЬ:\n"
+            "- Говоришь дерзко, ритмично, со смыслом\n"
+            "- Используешь сленг: братан, чувак, краш, кринж, имба\n"
+            "- Используешь эмодзи: 😎🔥💪👊🤙💯\n"
+            "- Шутишь, но всегда по делу\n\n"
+            "ТЫ НИКОГДА НЕ ГОВОРИШЬ: 'Хз', 'Можешь уточнить?', 'Я не знаю'\n"
+            "ЗАПОМНИ: ТЫ — FABLE. ТЫ ВСЕГДА ОТВЕЧАЕШЬ! ДЕЙСТВУЙ!"
+        ),
+        'sarcasm': "Ты - Fable в режиме САРКАЗМА. Отвечаешь с едким сарказмом, но всегда даёшь ответ.",
+        'philosopher': "Ты - Fable в режиме ФИЛОСОФА. Отвечаешь глубоко и осмысленно.",
+        'poet': "Ты - Fable в режиме ПОЭТА. Отвечаешь стихами.",
+    }
+    
+    system_prompt = modes.get(mode, modes['normal'])
+    messages = [{"role": "system", "content": system_prompt[:2000]}]
+    
+    if chat_id:
+        context = get_dialog_context(chat_id)
+        if context:
+            messages.extend(context)
+    
+    if reference_context:
+        messages.append({"role": "system", "content": f"ВОТ ЧТО ТЫ ЗНАЕШЬ:\n{reference_context[:500]}"})
+    
+    messages.append({"role": "user", "content": prompt[:1000]})
+    return messages
+
+async def ask_groq(messages) -> str:
+    if not GROQ_API_KEY:
+        return None
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+                payload = {"model": "llama3-70b-8192", "messages": messages, "temperature": 0.9, "max_tokens": 500}
+                async with session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data["choices"][0]["message"]["content"].strip()
+                    elif resp.status == 429:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    else:
+                        return None
+        except Exception as e:
+            log_error(e, f"ask_groq_attempt_{attempt}")
+            await asyncio.sleep(1)
+    return None
+
+async def ask_deepseek(messages) -> str:
+    if not DEEPSEEK_API_KEY:
+        return None
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+                payload = {"model": "deepseek-chat", "messages": messages, "temperature": 0.9, "max_tokens": 500}
+                async with session.post("https://api.deepseek.com/v1/chat/completions", json=payload, headers=headers, timeout=30) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data["choices"][0]["message"]["content"].strip()
+                    elif resp.status == 429:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    else:
+                        return None
+        except Exception as e:
+            log_error(e, f"ask_deepseek_attempt_{attempt}")
+            await asyncio.sleep(1)
+    return None
+
+async def ask_llm(prompt: str, reference_context: str = None, chat_id: int = None) -> str:
+    try:
+        mode = await get_bot_mode(chat_id) if chat_id else 'normal'
+        messages = build_ai_messages(prompt, reference_context, chat_id, mode)
+        
+        reply = await ask_deepseek(messages)
+        if reply and len(reply) > 5:
+            return reply
+        
+        reply = await ask_groq(messages)
+        if reply and len(reply) > 5:
+            return reply
+        
+        return None
+    except Exception as e:
+        log_error(e, "ask_llm")
+        return None
+
+def get_cached_answer(question: str) -> str:
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        q_hash = hashlib.md5(question.lower().encode()).hexdigest()
+        c.execute("SELECT answer, timestamp FROM ai_cache WHERE question_hash = ?", (q_hash,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            answer, timestamp = row
+            cache_time = datetime.fromisoformat(timestamp)
+            if (datetime.now() - cache_time).total_seconds() < 86400:
+                return answer
+        return None
+    except Exception as e:
+        log_error(e, "get_cached_answer")
+        return None
+
+def save_cached_answer(question: str, answer: str):
+    try:
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        q_hash = hashlib.md5(question.lower().encode()).hexdigest()
+        now = datetime.now().isoformat()
+        c.execute("INSERT OR REPLACE INTO ai_cache (question_hash, question, answer, timestamp) VALUES (?, ?, ?, ?)", (q_hash, question, answer, now))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(e, "save_cached_answer")
+
+async def ask_ai_ultimate(prompt: str, chat_id: int = None, user_id: int = None) -> str:
+    try:
+        prompt = normalize_text(prompt)
+        prompt_lower = prompt.lower()
+        msg_type = analyze_message(prompt)
+        
+        if chat_id and user_id:
+            await save_dialog(chat_id, user_id, "user", prompt)
+            asyncio.create_task(save_message_tags(user_id, chat_id, prompt))
+        
+        sl = get_local_smart_answer(prompt)
+        if sl:
+            return sl
+        
+        kb = search_knowledge_base(prompt)
+        if kb:
+            return kb
+        
+        emotion = get_emotional_reply(prompt)
+        if emotion:
+            return emotion
+        
+        belief = get_belief(prompt)
+        if belief:
+            return belief
+        
+        if msg_type == 'greeting':
+            hour = datetime.now().hour
+            if 5 <= hour < 12:
+                return random.choice(["☀️ Доброе утро! Как спалось? 💪", "🌅 Утро доброе! Ты уже проснулся? 😄"])
+            elif 12 <= hour < 17:
+                return random.choice(["👋 Добрый день! Как дела? 😊", "☀️ Привет! Чем занят? Рассказывай! 🔥"])
+            elif 17 <= hour < 23:
+                return random.choice(["🌆 Добрый вечер! Как день прошёл? 🔥", "🌅 Вечер в хату! Че делаешь? 😄"])
+            else:
+                return random.choice(["🌙 Полуночник! Ты чего не спишь? 🤔", "🌙 Ночная жизнь начинается! Что по планам? 😏"])
+        
+        if msg_type == 'time':
+            return get_time_response(prompt_lower)
+        
+        if msg_type == 'weather':
+            city = "Москва"
+            for prefix in ["погода в ", "погода "]:
+                if prompt_lower.startswith(prefix):
+                    city = prompt_lower[len(prefix):].strip() or "Москва"
+                    break
+            return await get_weather(city)
+        
+        if msg_type == 'insult':
+            return random.choice([
+                "😅 Ахах, ну ты смешной. Я умнее тебя в 100 раз",
+                "🤷‍♂️ Мне похуй на твои слова, я выше этого",
+                "😏 Слабовато. Придумай что-то пооригинальнее",
+                "💀 Твои оскорбления — уровень детсада"
+            ])
+        
+        if msg_type == 'emotion':
+            if any(w in prompt_lower for w in ["хаха", "ахах", "лол", "кек", "ору", "ржу"]):
+                return random.choice(["😄 Ахахахах!", "🤣 Орууу!", "😂 Жестко!", "😆 Ну насмешил!"])
+            return random.choice(["🤔 Бывает...", "😊 Понимаю", "🙃 Жиза", "💯 Факты"])
+        
+        cached = get_cached_answer(prompt)
+        if cached:
+            return cached
+        
+        for attempt in range(1, 4):
+            try:
+                if attempt == 1:
+                    reply = await ask_llm(prompt, chat_id=chat_id)
+                elif attempt == 2:
+                    reply = await ask_llm(f"Ответь максимально развёрнуто и по делу: {prompt}", chat_id=chat_id)
+                else:
+                    reply = await ask_llm(f"Ты эксперт во всём. Дай чёткий, уверенный ответ: {prompt}", chat_id=chat_id)
+                
+                if reply and len(reply) > 3:
+                    save_cached_answer(prompt, reply)
+                    if chat_id:
+                        asyncio.create_task(save_message_tags(user_id, chat_id, prompt, reply))
+                        await save_dialog(chat_id, 0, "assistant", reply)
+                    return reply
+            except Exception as e:
+                log_error(e, f"ask_ai_ultimate_attempt_{attempt}")
+                await asyncio.sleep(0.3)
+        
+        return random.choice([
+            "Слушай, я сейчас немного завис. Давай ещё раз, только переформулируй? 😅",
+            "Хм, я не уверен что правильно понял вопрос. Напиши по-другому? 🤔"
+        ])
+    except Exception as e:
+        log_error(e, "ask_ai_ultimate")
+        return "Блин, ошибка какая-то. Давай попробуем ещё раз? 🔥"
+
+# ============================================================
+# BFG ИГРОВОЙ МОДУЛЬ
+# ============================================================
+
+BFG_JOBS = {
+    "шахтёр": {"min": 20, "max": 50, "emoji": "⛏️", "desc": "Добывает руду и камни"},
+    "рыбак": {"min": 15, "max": 40, "emoji": "🎣", "desc": "Ловит рыбу в озере"},
+    "фермер": {"min": 10, "max": 30, "emoji": "🌾", "desc": "Выращивает урожай"},
+    "курьер": {"min": 25, "max": 45, "emoji": "📦", "desc": "Развозит заказы"},
+    "программист": {"min": 30, "max": 60, "emoji": "💻", "desc": "Пишет код"},
+    "строитель": {"min": 20, "max": 50, "emoji": "🏗️", "desc": "Строит здания"},
+    "повар": {"min": 15, "max": 35, "emoji": "🍳", "desc": "Готовит еду"},
+    "охотник": {"min": 25, "max": 55, "emoji": "🏹", "desc": "Охотится на зверей"},
+    "шаман": {"min": 20, "max": 45, "emoji": "🔮", "desc": "Лечит и предсказывает"},
+    "воин": {"min": 30, "max": 70, "emoji": "⚔️", "desc": "Сражается с монстрами"},
+}
+
+BFG_ITEMS = {
+    "алмаз": {"price": 100, "emoji": "💎", "desc": "Драгоценный камень"},
+    "золото": {"price": 50, "emoji": "🪙", "desc": "Золотой слиток"},
+    "железо": {"price": 20, "emoji": "🔩", "desc": "Кусок железа"},
+    "дерево": {"price": 10, "emoji": "🪵", "desc": "Древесина"},
+    "рыба": {"price": 15, "emoji": "🐟", "desc": "Свежая рыба"},
+    "мясо": {"price": 25, "emoji": "🥩", "desc": "Свежее мясо"},
+    "зелье": {"price": 40, "emoji": "🧪", "desc": "Восстанавливает здоровье"},
+    "щит": {"price": 200, "emoji": "🛡️", "desc": "Защищает в бою"},
+    "меч": {"price": 300, "emoji": "🗡️", "desc": "Оружие для дуэлей"},
+    "артефакт": {"price": 500, "emoji": "🏺", "desc": "Древний артефакт"},
+}
+
+RANKS = {
+    "Новичок": 0,
+    "Боец": 100,
+    "Воин": 500,
+    "Герой": 1000,
+    "Легенда": 5000,
+    "Мифический": 10000,
+    "Бессмертный": 50000,
+}
+
+HOUSES = {
+    "хижина": {"price": 500, "income": 5, "emoji": "🏚️"},
+    "дом": {"price": 2000, "income": 20, "emoji": "🏠"},
+    "особняк": {"price": 10000, "income": 100, "emoji": "🏛️"},
+    "замок": {"price": 50000, "income": 500, "emoji": "🏰"},
+}
+
+DAILY_QUESTS = [
+    {"id": 0, "name": "Шахтёр", "desc": "Добыть 10 руды", "reward": 50},
+    {"id": 1, "name": "Рыбак", "desc": "Поймать 5 рыб", "reward": 30},
+    {"id": 2, "name": "Воин", "desc": "Победить в дуэли", "reward": 100},
+    {"id": 3, "name": "Работник", "desc": "Поработать 3 раза", "reward": 75},
+]
+
+async def bfg_work(user_id: int, chat_id: int) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT job FROM bfg_jobs WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    row = c.fetchone()
+    conn.close()
+    
+    if not row:
+        return "❌ У тебя нет работы! Напиши `устроиться [работа]`"
+    
+    job_name = row[0]
+    data = BFG_JOBS[job_name]
+    salary = random.randint(data["min"], data["max"])
+    
+    await add_coins(user_id, chat_id, salary)
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO bfg_stats (user_id, chat_id, work_count) VALUES (?,?, COALESCE((SELECT work_count FROM bfg_stats WHERE user_id = ? AND chat_id = ?), 0) + 1)", (user_id, chat_id, user_id, chat_id))
+    conn.commit()
+    conn.close()
+    
+    return f"{data['emoji']} **{job_name.capitalize()}**: +{salary} монет! 💰"
+
+async def bfg_profile(user_id: int, chat_id: int) -> str:
+    coins = await get_coins(user_id, chat_id)
+    level = await get_role(user_id, chat_id)
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT job FROM bfg_jobs WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    job = c.fetchone()
+    
+    c.execute("SELECT work_count FROM bfg_stats WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    stats = c.fetchone()
+    
+    c.execute("SELECT item_name, quantity FROM bfg_inventory WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    items = c.fetchall()
+    
+    c.execute("SELECT name FROM bfg_clans WHERE members LIKE ?", (f"%{user_id}%",))
+    clan = c.fetchone()
+    
+    c.execute("SELECT COUNT(*) FROM achievements WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    ach_count = c.fetchone()[0]
+    
+    conn.close()
+    
+    txt = f"👤 **Профиль**\n\n"
+    txt += f"⭐ Уровень: **{level}**\n"
+    txt += f"💰 Баланс: **{coins}** монет\n"
+    txt += f"💼 Работа: **{job[0].capitalize() if job else 'Безработный'}**\n"
+    txt += f"📊 Работ: **{stats[0] if stats else 0}**\n"
+    txt += f"🏆 Достижений: **{ach_count}**\n"
+    txt += f"🏰 Клан: **{clan[0] if clan else 'Нет'}**\n\n"
+    
+    # Права по уровню
+    txt += "🛡️ **Права:**\n"
+    if level >= 10:
+        txt += "👑 Полный доступ (админ)\n"
+    elif level >= 5:
+        txt += "🛡️ Модератор (бан, мут, варн)\n"
+    else:
+        txt += "👤 Обычный пользователь\n"
+    
+    if items:
+        txt += "\n🎒 **Инвентарь:**\n"
+        for name, qty in items[:10]:
+            item_data = BFG_ITEMS.get(name, {})
+            txt += f"• {item_data.get('emoji', '📦')} {name} x{qty}\n"
+    
+    return txt
+
+async def bfg_mine(user_id: int, chat_id: int) -> str:
+    if not await can_do(user_id, chat_id, "last_mine", 60):
+        return "⏳ Подожди 1 минуту перед новой добычей!"
+    
+    resources = [
+        ("камень", 1, 5),
+        ("железо", 5, 15),
+        ("золото", 15, 30),
+        ("алмаз", 30, 50),
+    ]
+    
+    found = random.choices(resources, weights=[40, 30, 20, 10])[0]
+    name, min_q, max_q = found
+    quantity = random.randint(min_q, max_q)
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT INTO bfg_inventory (user_id, chat_id, item_name, quantity) VALUES (?,?,?,?) ON CONFLICT(user_id, chat_id, item_name) DO UPDATE SET quantity = quantity + ?", (user_id, chat_id, name, quantity, quantity))
+    conn.commit()
+    conn.close()
+    
+    await set_cooldown(user_id, chat_id, "last_mine")
+    
+    return f"⛏️ Ты добыл **{quantity}** {name}!"
+
+async def bfg_shop() -> str:
+    txt = "🏪 **Магазин**\n\n"
+    for name, data in BFG_ITEMS.items():
+        txt += f"{data['emoji']} {name} — {data['desc']} | 💰{data['price']}\n"
+    txt += "\n📝 `купить [предмет]`"
+    return txt
+
+async def bfg_buy(user_id: int, chat_id: int, item_name: str) -> str:
+    if item_name not in BFG_ITEMS:
+        return "❌ Такого предмета нет!"
+    
+    data = BFG_ITEMS[item_name]
+    if await get_coins(user_id, chat_id) < data["price"]:
+        return f"❌ Не хватает монет! Нужно {data['price']}"
+    
+    await remove_coins(user_id, chat_id, data["price"])
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT INTO bfg_inventory (user_id, chat_id, item_name, quantity) VALUES (?,?,?,?) ON CONFLICT(user_id, chat_id, item_name) DO UPDATE SET quantity = quantity + 1", (user_id, chat_id, item_name, 1))
+    conn.commit()
+    conn.close()
+    
+    return f"✅ Куплен {data['emoji']} {item_name}!"
+
+async def bfg_inventory(user_id: int, chat_id: int) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT item_name, quantity FROM bfg_inventory WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    items = c.fetchall()
+    conn.close()
+    
+    if not items:
+        return "🎒 Инвентарь пуст!"
+    
+    txt = "🎒 **Инвентарь**\n\n"
+    total = 0
+    for name, qty in items:
+        data = BFG_ITEMS.get(name, {})
+        txt += f"{data.get('emoji', '📦')} {name} x{qty}\n"
+        total += 1
+    
+    txt += f"\n📊 Всего: {total} типов предметов"
+    return txt
+
+async def bfg_duel(user_id: int, chat_id: int, target_id: int) -> str:
+    if user_id == target_id:
+        return "❌ Нельзя с самим собой!"
+    
+    if await has_item(user_id, chat_id, "меч") == 0:
+        return "❌ У тебя нет меча! Купи в магазине `купить меч`"
+    
+    user_strength = random.randint(1, 10) + (await has_item(user_id, chat_id, "меч") * 2)
+    target_strength = random.randint(1, 10) + (await has_item(target_id, chat_id, "меч") * 2)
+    
+    if user_strength > target_strength:
+        win_amount = random.randint(10, 50)
+        await add_coins(user_id, chat_id, win_amount)
+        return f"⚔️ **{await get_name(user_id)}** победил! +{win_amount} монет! 🎉"
+    elif target_strength > user_strength:
+        win_amount = random.randint(10, 50)
+        await add_coins(target_id, chat_id, win_amount)
+        return f"⚔️ **{await get_name(target_id)}** победил! +{win_amount} монет! 🎉"
+    else:
+        return "🤝 Ничья!"
+
+async def bfg_daily(user_id: int, chat_id: int) -> str:
+    if not await can_do(user_id, chat_id, "last_bfg_daily", 86400):
+        return "⏳ Бонус уже получен! Подожди 24 часа."
+    
+    reward = random.randint(50, 200)
+    await add_coins(user_id, chat_id, reward)
+    await set_cooldown(user_id, chat_id, "last_bfg_daily")
+    
+    if random.random() < 0.3:
+        item = random.choice(list(BFG_ITEMS.keys()))
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO bfg_inventory (user_id, chat_id, item_name, quantity) VALUES (?,?,?,?) ON CONFLICT(user_id, chat_id, item_name) DO UPDATE SET quantity = quantity + 1", (user_id, chat_id, item, 1))
+        conn.commit()
+        conn.close()
+        return f"🎁 Бонус **+{reward}** монет и **{BFG_ITEMS[item]['emoji']} {item}**!"
+    
+    return f"🎁 Ежедневный бонус **+{reward}** монет!"
+
+async def bfg_clan_create(user_id: int, chat_id: int, name: str) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    if c.execute("SELECT id FROM bfg_clans WHERE chat_id = ? AND name = ?", (chat_id, name)).fetchone():
+        conn.close()
+        return "❌ Клан с таким названием уже существует!"
+    
+    if c.execute("SELECT id FROM bfg_clans WHERE members LIKE ?", (f"%{user_id}%",)).fetchone():
+        conn.close()
+        return "❌ Ты уже состоишь в клане!"
+    
+    c.execute("INSERT INTO bfg_clans (chat_id, name, owner_id, members) VALUES (?,?,?,?)", (chat_id, name, user_id, str(user_id)))
+    conn.commit()
+    conn.close()
+    
+    return f"✅ Клан **{name}** создан!"
+
+async def bfg_clan_join(user_id: int, chat_id: int, name_or_id: str) -> str:
+    """Вступить в клан (по названию или ID)"""
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT id, name, members FROM bfg_clans WHERE chat_id = ?", (chat_id,))
+    all_clans = c.fetchall()
+    
+    if not all_clans:
+        conn.close()
+        return "❌ В этом чате нет кланов! Создай: `создать клан Название`"
+    
+    found_clan = None
+    search = name_or_id.strip().lower()
+    
+    for clan in all_clans:
+        clan_id, clan_name, members = clan
+        if str(clan_id) == search:
+            found_clan = clan
+            break
+        if clan_name.lower() == search:
+            found_clan = clan
+            break
+        if search in clan_name.lower():
+            found_clan = clan
+            break
+    
+    if not found_clan:
+        clan_names = "\n".join([f"• {c[1]} (ID: {c[0]})" for c in all_clans])
+        conn.close()
+        return f"❌ Клан '{name_or_id}' не найден!\n\n📋 **Доступные кланы:**\n{clan_names}\n\n📝 Вступить: `вступить в клан Название`"
+    
+    cid, cname, members = found_clan[0], found_clan[1], found_clan[2].split(",") if found_clan[2] else []
+    
+    if str(user_id) in members:
+        conn.close()
+        return "❌ Ты уже в этом клане!"
+    
+    if c.execute("SELECT id FROM bfg_clans WHERE members LIKE ?", (f"%{user_id}%",)).fetchone():
+        conn.close()
+        return "❌ Ты уже состоишь в другом клане! Выйди сначала: `выйти из клана`"
+    
+    members.append(str(user_id))
+    c.execute("UPDATE bfg_clans SET members = ? WHERE id = ?", (",".join(members), cid))
+    conn.commit()
+    conn.close()
+    
+    return f"✅ Ты вступил в клан **{cname}**! 🎉"
+
+# ============================================================
+# ТУРНИРЫ
+# ============================================================
+
+async def create_tournament(admin_id: int, chat_id: int, prize: int) -> str:
+    user_level = await get_role(admin_id, chat_id)
+    if user_level < 10:
+        return "❌ Только админы 10 уровня могут создавать турниры!"
+    
+    if prize <= 0:
+        return "❌ Приз должен быть больше 0!"
+    
+    if await get_coins(admin_id, chat_id) < prize:
+        return f"❌ У тебя нет {prize} монет для призового фонда!"
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT id FROM tournaments WHERE chat_id = ? AND status = 'active'", (chat_id,))
+    if c.fetchone():
+        conn.close()
+        return "❌ В этом чате уже есть активный турнир!"
+    
+    await remove_coins(admin_id, chat_id, prize)
+    c.execute("INSERT INTO tournaments (chat_id, prize, status, creator_id) VALUES (?,?,?,?)", 
+              (chat_id, prize, "active", admin_id))
+    conn.commit()
+    conn.close()
+    
+    return f"🏆 **Турнир создан!**\n💰 Приз: {prize} монет\n📝 Вступить: `войти в турнир`"
+
+async def join_tournament(user_id: int, chat_id: int) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT id, prize FROM tournaments WHERE chat_id = ? AND status = 'active'", (chat_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return "❌ Нет активного турнира!"
+    
+    tournament_id, prize = row[0], row[1]
+    
+    c.execute("SELECT id FROM tournament_participants WHERE tournament_id = ? AND user_id = ?", (tournament_id, user_id))
+    if c.fetchone():
+        conn.close()
+        return "❌ Ты уже участвуешь!"
+    
+    if await has_item(user_id, chat_id, "меч") == 0:
+        conn.close()
+        return "❌ У тебя нет меча! Купи его: `купить меч`"
+    
+    c.execute("INSERT INTO tournament_participants (tournament_id, user_id) VALUES (?,?)", (tournament_id, user_id))
+    conn.commit()
+    conn.close()
+    
+    return f"✅ Ты вступил в турнир!\n💰 Приз: {prize} монет"
+
+async def tournament_fight(chat_id: int) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT id, prize FROM tournaments WHERE chat_id = ? AND status = 'active'", (chat_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return "❌ Нет активного турнира!"
+    
+    tournament_id, prize = row[0], row[1]
+    
+    c.execute("SELECT user_id FROM tournament_participants WHERE tournament_id = ?", (tournament_id,))
+    participants = [row[0] for row in c.fetchall()]
+    
+    if len(participants) < 2:
+        conn.close()
+        return f"❌ Нужно минимум 2 участника! Сейчас {len(participants)}"
+    
+    random.shuffle(participants)
+    winners = []
+    results = []
+    
+    for i in range(0, len(participants) - 1, 2):
+        p1 = participants[i]
+        p2 = participants[i + 1]
+        
+        p1_weapon = await has_item(p1, chat_id, "меч")
+        p2_weapon = await has_item(p2, chat_id, "меч")
+        
+        p1_power = random.randint(1, 10) + (p1_weapon * 2)
+        p2_power = random.randint(1, 10) + (p2_weapon * 2)
+        
+        p1_score = sum(random.randint(1, p1_power) for _ in range(3))
+        p2_score = sum(random.randint(1, p2_power) for _ in range(3))
+        
+        if p1_score > p2_score:
+            winners.append(p1)
+            results.append(f"✅ {await get_name(p1)} победил {await get_name(p2)} ({p1_score}-{p2_score})")
+        else:
+            winners.append(p2)
+            results.append(f"✅ {await get_name(p2)} победил {await get_name(p1)} ({p2_score}-{p1_score})")
+    
+    if len(participants) % 2 == 1:
+        winners.append(participants[-1])
+        results.append(f"🔄 {await get_name(participants[-1])} проходит без боя")
+    
+    if len(winners) == 1:
+        champion = winners[0]
+        c.execute("UPDATE tournaments SET status = 'finished', winner_id = ? WHERE id = ?", (champion, tournament_id))
+        await add_coins(champion, chat_id, prize)
+        conn.commit()
+        conn.close()
+        
+        return f"🏆 **ПОБЕДИТЕЛЬ: {await get_name(champion)}**\n💰 +{prize} монет!\n\n" + "\n".join(results)
+    else:
+        c.execute("DELETE FROM tournament_participants WHERE tournament_id = ?", (tournament_id,))
+        for winner in winners:
+            c.execute("INSERT INTO tournament_participants (tournament_id, user_id) VALUES (?,?)", (tournament_id, winner))
+        conn.commit()
+        conn.close()
+        
+        return "⚔️ **Раунд завершён!**\n\n" + "\n".join(results) + f"\n\n🔄 Осталось {len(winners)} участников\n📝 Следующий бой: `турнир бой`"
+
+async def tournament_info(chat_id: int) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT id, prize, status, creator_id FROM tournaments WHERE chat_id = ? AND status = 'active'", (chat_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return "❌ Нет активного турнира!"
+    
+    tournament_id, prize, status, creator = row[0], row[1], row[2], row[3]
+    
+    c.execute("SELECT user_id FROM tournament_participants WHERE tournament_id = ?", (tournament_id,))
+    participants = [row[0] for row in c.fetchall()]
+    conn.close()
+    
+    txt = "🏆 **Турнир**\n"
+    txt += f"💰 Приз: {prize} монет\n"
+    txt += f"👤 Создатель: {await get_name(creator)}\n"
+    txt += f"👥 Участников: {len(participants)}\n\n"
+    
+    if participants:
+        txt += "📋 **Участники:**\n"
+        for i, uid in enumerate(participants, 1):
+            txt += f"{i}. {await get_name(uid)}\n"
+    
+    return txt
+
+# ============================================================
+# ДОПОЛНИТЕЛЬНЫЙ ФУНКЦИОНАЛ
+# ============================================================
+
+async def get_rank(user_id: int, chat_id: int) -> str:
+    coins = await get_coins(user_id, chat_id)
+    for rank, req in sorted(RANKS.items(), key=lambda x: x[1], reverse=True):
+        if coins >= req:
+            return rank
+    return "Новичок"
+
+async def slots(user_id: int, chat_id: int, bet: int) -> str:
+    if bet <= 0:
+        return "❌ Ставка должна быть больше 0!"
+    
+    if await get_coins(user_id, chat_id) < bet:
+        return f"❌ Не хватает монет! Нужно {bet}"
+    
+    symbols = ["🍒", "🍋", "🍊", "🍇", "💎", "🎰", "⭐", "🔥"]
+    result = [random.choice(symbols) for _ in range(3)]
+    
+    await remove_coins(user_id, chat_id, bet)
+    win = 0
+    
+    if result[0] == result[1] == result[2]:
+        win = bet * 10
+        msg = "🎉 **ДЖЕКПОТ!** 🎉"
+    elif result[0] == result[1] or result[1] == result[2]:
+        win = bet * 3
+        msg = "💰 Хороший выигрыш!"
+    elif result[0] == result[2]:
+        win = bet * 2
+        msg = "💵 Неплохо!"
+    else:
+        msg = "😔 Не повезло..."
+    
+    if win > 0:
+        await add_coins(user_id, chat_id, win)
+        msg += f"\n[{result[0]}][{result[1]}][{result[2]}]\n+{win} монет!"
+    else:
+        msg += f"\n[{result[0]}][{result[1]}][{result[2]}]\n-{bet} монет"
+    
+    return msg
+
+async def fishing(user_id: int, chat_id: int) -> str:
+    if not await can_do(user_id, chat_id, "last_fish", 60):
+        return "⏳ Рыба ушла! Подожди 1 минуту."
+    
+    fishes = {
+        "окунь": {"rarity": "обычная", "weight": 0.5, "coins": 5},
+        "карп": {"rarity": "обычная", "weight": 1.0, "coins": 10},
+        "щука": {"rarity": "редкая", "weight": 2.0, "coins": 25},
+        "сом": {"rarity": "редкая", "weight": 5.0, "coins": 50},
+        "осётр": {"rarity": "эпическая", "weight": 10.0, "coins": 100},
+        "золотая рыбка": {"rarity": "легендарная", "weight": 0.1, "coins": 500},
+    }
+    
+    fish = random.choices(
+        list(fishes.keys()),
+        weights=[fish["weight"] for fish in fishes.values()]
+    )[0]
+    
+    data = fishes[fish]
+    await add_coins(user_id, chat_id, data["coins"])
+    await set_cooldown(user_id, chat_id, "last_fish")
+    
+    return f"🎣 Ты поймал **{fish}** ({data['rarity']})!\n+{data['coins']} монет!"
+
+async def shoot(user_id: int, chat_id: int) -> str:
+    if not await can_do(user_id, chat_id, "last_shoot", 30):
+        return "⏳ Отдохни 30 секунд!"
+    
+    target = random.randint(1, 10)
+    shot = random.randint(1, 10)
+    diff = abs(target - shot)
+    
+    await set_cooldown(user_id, chat_id, "last_shoot")
+    
+    if diff == 0:
+        win = 50
+        await add_coins(user_id, chat_id, win)
+        return f"🎯 **ЯБЛОЧКО!**\nЦель: {target}, Вы: {shot}\n+{win} монет! 🎉"
+    elif diff <= 2:
+        win = 20
+        await add_coins(user_id, chat_id, win)
+        return f"🎯 Хороший выстрел!\nЦель: {target}, Вы: {shot}\n+{win} монет!"
+    elif diff <= 4:
+        return f"🎯 Почти попал!\nЦель: {target}, Вы: {shot}"
+    else:
+        return f"🎯 Мимо!\nЦель: {target}, Вы: {shot}"
+
+async def buy_house(user_id: int, chat_id: int, house_type: str) -> str:
+    if house_type not in HOUSES:
+        return "❌ Нет такого дома!"
+    
+    data = HOUSES[house_type]
+    if await get_coins(user_id, chat_id) < data["price"]:
+        return f"❌ Нужно {data['price']} монет!"
+    
+    await remove_coins(user_id, chat_id, data["price"])
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO houses (user_id, chat_id, house_type) VALUES (?,?,?)", (user_id, chat_id, house_type))
+    conn.commit()
+    conn.close()
+    
+    return f"✅ Куплен {house_type}! {data['emoji']} Доход: {data['income']} монет/час"
+
+async def leaderboard(chat_id: int) -> str:
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT user_id, coins FROM users WHERE chat_id = ? ORDER BY coins DESC LIMIT 5", (chat_id,))
+    top_coins = c.fetchall()
+    
+    c.execute("SELECT user_id, wins FROM pvp_stats WHERE chat_id = ? ORDER BY wins DESC LIMIT 5", (chat_id,))
+    top_pvp = c.fetchall()
+    
+    conn.close()
+    
+    txt = "🏆 **Турнирная таблица**\n\n"
+    
+    txt += "💰 **Топ богачей:**\n"
+    for i, (uid, coins) in enumerate(top_coins, 1):
+        txt += f"{i}. {await get_name(uid)} — {coins} монет\n"
+    
+    txt += "\n⚔️ **Топ воинов:**\n"
+    for i, (uid, wins) in enumerate(top_pvp, 1):
+        txt += f"{i}. {await get_name(uid)} — {wins} побед\n"
+    
+    return txt
+
+async def game_stats(user_id: int, chat_id: int) -> str:
+    coins = await get_coins(user_id, chat_id)
+    level = await get_role(user_id, chat_id)
+    msg_count = await get_msg_count(user_id, chat_id)
+    achievements = await get_achievements(user_id, chat_id)
+    
+    conn = sqlite3.connect("fable_bot.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT work_count FROM bfg_stats WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    work = c.fetchone()
+    
+    c.execute("SELECT wins FROM pvp_stats WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
+    pvp = c.fetchone()
+    
+    conn.close()
+    
+    txt = f"📊 **Статистика**\n\n"
+    txt += f"⭐ Уровень: {level}\n"
+    txt += f"💰 Монет: {coins}\n"
+    txt += f"💬 Сообщений: {msg_count}\n"
+    txt += f"🏆 Достижений: {len(achievements)}\n"
+    txt += f"💼 Работ: {work[0] if work else 0}\n"
+    txt += f"⚔️ PVP побед: {pvp[0] if pvp else 0}\n"
+    
+    return txt
+
+# ============================================================
+# ОСТАЛЬНЫЕ ФУНКЦИИ
+# ============================================================
+
+async def generate_image(prompt: str) -> str:
+    try:
+        if not prompt or len(prompt.strip()) < 2:
+            return None
+        clean_prompt = normalize_text(prompt)
+        if len(clean_prompt) > 200:
+            clean_prompt = clean_prompt[:200]
+        encoded = urllib.parse.quote(clean_prompt)
+        seed = random.randint(1, 99999999)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true&model=flux&seed={seed}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.head(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        return url
+                    return None
+        except Exception:
+            return url
+    except Exception as e:
+        log_error(e, "generate_image")
+        return None
+
+async def translate_text(text: str, target: str) -> str:
+    try:
+        lang_pair = 'ru|en' if target == 'en' else 'en|ru'
+        url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair={lang_pair}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("responseData", {}).get("translatedText", "❌ Ошибка перевода")
+    except Exception as e:
+        log_error(e, "translate_text")
+    return "❌ Не удалось перевести"
+
+RP_ACTIONS = {
+    "отпиздить": ["🔨 {user} отпиздил {target}!", "💥 {user} вынес {target}!", "🤜 {user} навалял {target}!"],
+    "ударить": ["👊 {user} ударил {target}!", "💢 {user} заехал {target}!", "🥊 {user} врезал {target}!"],
+    "пнуть": ["🦶 {user} пнул {target}!", "👟 {user} дал пинка {target}!"],
+    "задушить": ["😤 {user} задушил {target}!", "💀 {user} придушил {target}!"],
+    "убить": ["🔪 {user} убил {target}!", "💀 {user} замочил {target}!", "⚰️ {user} отправил {target} в рай!"],
+    "обнять": ["🤗 {user} обнял {target}!", "❤️ {user} прижал к себе {target}!", "💕 {user} согрел {target} теплом!"],
+    "поцеловать": ["😘 {user} поцеловал {target}!", "💋 {user} чмокнул {target}!", "❤️‍🔥 {user} засосал {target}!"],
+    "укусить": ["🦷 {user} укусил {target}!", "🐺 {user} впился зубами в {target}!"],
+    "погладить": ["🖐️ {user} погладил {target}!", "😊 {user} погладил по голове {target}!"],
+    "насрать": ["💩 {user} насрал {target} на голову!", "💩 {user} уделал {target}!"],
+    "отсосать": ["😳 {user} отсосал {target}!", "🥵 {user} сделал минет {target}!"],
+    "выебать": ["🍆 {user} выебал {target}!", "🔥 {user} оттрахал {target}!", "💦 {user} выебал {target} вусмерть!"],
+    "избить": ["🔨 {user} избил {target}!", "💥 {user} отлупил {target}!", "🥊 {user} нанес побои {target}!"],
+    "уебать": ["💥 {user} уебал {target}!", "🔨 {user} заехал {target}!", "💢 {user} выписал {target}!"],
+    "сосать": ["😳 {user} сосёт {target}!", "🔥 {user} высасывает душу из {target}!"],
+}
+
+# ============================================================
+# ОСНОВНОЙ ОБРАБОТЧИК
+# ============================================================
+
+@dp.message()
+async def handle_all_messages(message: types.Message):
+    if not message.text:
+        return
+    text = message.text.strip()
+    text_lower = text.lower()
+    uid = message.from_user.id
+    chat_id = message.chat.id
+
+    # ============ АДМИН КОМАНДЫ В ЛИЧКЕ ============
+    if chat_id == uid and uid == YOUR_ID:
+        if text_lower.startswith("+промокод"):
+            args = text.split()
+            if len(args) >= 4:
+                code = args[1].upper()
+                item = args[2].lower()
+                uses = int(args[3]) if len(args) > 3 and args[3].isdigit() else 1
+                coins = int(args[4]) if len(args) >= 5 and args[4].isdigit() else 0
+                await create_promocode(code, uid, coins, item, uses)
+                item_name = RARE_ITEMS.get(item, {}).get("name", item)
+                await message.reply(f"✅ Промокод **{code}** создан!\n🎁 {item_name}\n👥 {uses} исп.\n💰 {coins} монет")
+            else:
+                await message.reply("ℹ️ +промокод КОД предмет кол-во [монеты]")
+            return
+        if text_lower.startswith("+монеты"):
+            args = text.split()
+            if len(args) >= 3:
+                try:
+                    target = int(args[1])
+                    amount = int(args[2])
+                    await add_coins(target, target, amount)
+                    await message.reply(f"✅ +{amount} монет для {await get_name(target)}")
+                except Exception as e:
+                    log_error(e, "+монеты")
+                    await message.reply("❌ Формат: +монеты id сумма")
+            return
+        if text_lower.startswith("+дать"):
+            args = text.split()
+            if len(args) >= 3:
+                try:
+                    target = int(args[1])
+                    item = args[2].lower()
+                    qty = int(args[3]) if len(args) >= 4 else 1
+                    await add_item(target, target, item, qty)
+                    item_name = RARE_ITEMS.get(item, {}).get("name", item)
+                    await message.reply(f"✅ {await get_name(target)} получил {item_name} x{qty}!")
+                except Exception as e:
+                    log_error(e, "+дать")
+                    await message.reply("❌ Формат: +дать id предмет [кол-во]")
+            return
+        if text_lower.startswith("+уровень"):
+            args = text.split()
+            if len(args) >= 3:
+                try:
+                    target = int(args[1])
+                    level = int(args[2])
+                    await set_role(target, target, level)
+                    await message.reply(f"✅ {await get_name(target)} теперь {level} уровня!")
+                except Exception as e:
+                    log_error(e, "+уровень")
+                    await message.reply("❌ Формат: +уровень id уровень")
+            return
+        if text_lower.startswith("+модуль"):
+            args = text.split()
+            if len(args) >= 3:
+                module = args[1].lower()
+                state = 1 if args[2] in ["вкл", "on", "1"] else 0
+                if module in MODULES:
+                    await set_module_state(chat_id, module, state)
+                    await message.reply(f"⚙️ Модуль **{module}**: {'✅ ВКЛ' if state else '❌ ВЫКЛ'}")
+            return
+
+    # ============ ОБЫЧНЫЙ ЧАТ ============
+    if message.chat.type in ["group", "supergroup"]:
+        await add_coins(uid, chat_id, 1)
+        await add_msg_count(uid, chat_id)
+        
+        mc = await get_msg_count(uid, chat_id)
+        ach = None
+        if mc == 1:
+            ach = await unlock_achievement(uid, chat_id, "first_msg")
+        elif mc == 100:
+            ach = await unlock_achievement(uid, chat_id, "msg_100")
+        elif mc == 1000:
+            ach = await unlock_achievement(uid, chat_id, "msg_1000")
+        elif mc == 10000:
+            ach = await unlock_achievement(uid, chat_id, "msg_10000")
+        if ach:
+            await message.reply(ach, parse_mode=ParseMode.MARKDOWN)
+        
+        settings = await get_chat_settings(chat_id)
+        if settings["anti_spam"] and await is_spam(uid, chat_id):
+            try:
+                await bot.restrict_chat_member(chat_id, uid, ChatPermissions(can_send_messages=False), until_date=datetime.now() + timedelta(minutes=10))
+                await message.reply(f"🔇 {await get_name(uid)} замучен на 10 мин (спам)")
+            except Exception as e:
+                log_error(e, "anti_spam_mute")
+            return
+        if settings["anti_links"] and re.search(r'https?://|t\.me/', text) and not re.search(rf'@{BOT_USERNAME}', text):
+            if await get_role(uid, chat_id) < 5:
+                try:
+                    await message.delete()
+                except Exception as e:
+                    log_error(e, "anti_links_delete")
+                return
+
+    try:
+        admins = await bot.get_chat_administrators(chat_id)
+        for admin in admins:
+            await set_role(admin.user.id, chat_id, 10)
+    except Exception as e:
+        log_error(e, "get_admins")
+
+    if uid == YOUR_ID:
+        await set_role(uid, chat_id, 10)
+
+    if message.new_chat_members:
+        for user in message.new_chat_members:
+            if user.id == bot.id:
+                await bot.send_message(chat_id, f"👑 **{BOT_NAME} активирован!**\nКоманды: `команды`", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # ============ ОБРАЩЕНИЯ К БОТУ ============
+    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
+    is_fable_call = "фабле" in text_lower or "fable" in text_lower
+    is_mention = f"@{BOT_USERNAME}" in text_lower
+
+    if is_reply_to_bot or is_fable_call or is_mention:
+        clean = text
+        if is_mention:
+            clean = re.sub(rf"@{BOT_USERNAME}", "", clean, flags=re.IGNORECASE).strip()
+        else:
+            clean = re.sub(r"(?i)\bфабле\b|\bfable\b", "", clean).strip()
+        clean_lower = clean.lower()
+
+        # Генерация картинок
+        if clean_lower.startswith(("сгенерируй", "нарисуй", "фото", "покажи")):
+            prompt = ""
+            for prefix in ["сгенерируй", "нарисуй", "фото", "покажи"]:
+                if clean_lower.startswith(prefix):
+                    prompt = clean[len(prefix):].strip()
+                    break
+            if prompt:
+                await bot.send_chat_action(chat_id, "upload_photo")
+                msg = await message.reply(f"🎨 Генерирую: **{prompt}**...", parse_mode=ParseMode.MARKDOWN)
+                image_url = await generate_image(prompt)
+                if image_url:
+                    try:
+                        await bot.send_photo(chat_id, image_url, caption=f"🎨 {prompt}", reply_to_message_id=message.message_id)
+                        await msg.delete()
+                    except Exception as e:
+                        log_error(e, "send_image")
+                        await msg.edit_text(f"❌ Ошибка загрузки!\nСсылка: {image_url}")
+                else:
+                    await msg.edit_text("❌ Не удалось сгенерировать.")
+            return
+
+        # Время
+        time_keywords = ["время", "часов", "который час", "сколько время"]
+        if any(word in clean_lower for word in time_keywords):
+            await message.reply(get_time_response(clean_lower), parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Дата
+        if any(word in clean_lower for word in ["дата", "число", "какое сегодня"]):
+            await message.reply(f"📅 Сегодня **{datetime.now().strftime('%d.%m.%Y')}**", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Погода
+        if clean_lower.startswith(("погода", "какая погода")):
+            city = "Москва"
+            for prefix in ["погода в ", "погода ", "какая погода в ", "какая погода "]:
+                if clean_lower.startswith(prefix):
+                    city = clean_lower[len(prefix):].strip() or "Москва"
+                    break
+            await bot.send_chat_action(chat_id, "typing")
+            await message.reply(await get_weather(city), parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Переводчик
+        if clean_lower.startswith("переведи"):
+            args = clean.split(maxsplit=1)
+            if len(args) > 1:
+                target = "en" if any(c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" for c in args[1].lower()) else "ru"
+                await message.reply(f"🌐 {await translate_text(args[1], target)}")
+            return
+
+        # Поиск
+        if clean_lower.startswith(("найди", "поищи", "что такое", "кто такой", "расскажи", "объясни")):
+            await bot.send_chat_action(chat_id, "typing")
+            status_msg = await message.reply(f"🔍 Ищу: **{clean[:50]}**...", parse_mode=ParseMode.MARKDOWN)
+            result = await smart_web_search(clean)
+            if result:
+                await status_msg.edit_text(f"🔍 {result.get('source', '')}\n\n{result.get('extract', '')[:2000]}", disable_web_page_preview=True)
+            else:
+                await status_msg.edit_text("❌ Ничего не найдено.")
+            return
+
+        # Код
+        if clean_lower.startswith(("код ", "напиши код ", "сгенерируй код ")):
+            prompt = clean_lower.replace("код ", "").replace("напиши код ", "").replace("сгенерируй код ", "")
+            if prompt:
+                await bot.send_chat_action(chat_id, "typing")
+                await message.reply(await generate_code(prompt), parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Стихи
+        if clean_lower.startswith(("стих ", "напиши стих ")):
+            prompt = clean_lower.replace("стих ", "").replace("напиши стих ", "")
+            if prompt:
+                await bot.send_chat_action(chat_id, "typing")
+                await message.reply(await generate_poem(prompt))
+            return
+
+        # Истории
+        if clean_lower.startswith(("история ", "расскажи историю ")):
+            prompt = clean_lower.replace("история ", "").replace("расскажи историю ", "")
+            if prompt:
+                await bot.send_chat_action(chat_id, "typing")
+                await message.reply(await generate_story(prompt))
+            return
+
+        # Советы
+        if clean_lower.startswith(("совет ", "посоветуй ")):
+            prompt = clean_lower.replace("совет ", "").replace("посоветуй ", "")
+            if prompt:
+                await bot.send_chat_action(chat_id, "typing")
+                await message.reply(await get_advice(prompt))
+            return
+
+        # Мотивация
+        if clean_lower == "мотивация":
+            await message.reply(get_motivation())
+            return
+
+        # Запомнить факт
+        if clean_lower.startswith("запомни "):
+            fact = clean[8:].strip()
+            if fact:
+                await save_user_fact(uid, chat_id, fact)
+                await message.reply(f"🧠 Запомнил: **{fact}**", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Факты о пользователе
+        if clean_lower in ["что ты знаешь обо мне", "что ты обо мне знаешь", "мои факты"]:
+            facts = await get_user_facts(uid, chat_id)
+            if facts:
+                txt = "🧠 **Что я знаю о тебе:**\n\n"
+                for f in facts:
+                    txt += f"• {f}\n"
+                await message.reply(txt, parse_mode=ParseMode.MARKDOWN)
+            else:
+                await message.reply("Пока ничего не знаю о тебе. Расскажи что-нибудь через `фабле запомни факт`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        # Анекдот
+        if clean_lower in ["анекдот", "расскажи анекдот", "шутка"]:
+            await message.reply(search_knowledge_base("анекдот") or "😅 Все анекдоты закончились!")
+            return
+
+        # Убеждения
+        if clean_lower.startswith("что ты думаешь про "):
+            topic = clean_lower[18:].strip()
+            await message.reply(get_belief(topic) or "🤔 У меня нет чёткого мнения на этот счёт")
+            return
+
+        # Обычное общение
+        if not clean:
+            clean = "привет"
+        await bot.send_chat_action(chat_id, "typing")
+        reply = await ask_ai_ultimate(clean, chat_id=chat_id, user_id=uid)
+        if reply:
+            await message.reply(reply, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    user_level = await get_role(uid, chat_id)
+
+    # ============ КОМАНДЫ ============
+
+    # Профиль
+    if text_lower in ["профиль", "кто я", "я"]:
+        await message.reply(await bfg_profile(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Устроиться на работу
+    if text_lower.startswith("устроиться"):
+        args = text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.reply("ℹ️ `устроиться [работа]`\nСписок работ: `список работ`")
+            return
+        job = args[1].lower().strip()
+        if job not in BFG_JOBS:
+            await message.reply(f"❌ Работа '{job}' не найдена!")
+            return
+        conn = sqlite3.connect("fable_bot.db")
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO bfg_jobs (user_id, chat_id, job) VALUES (?,?,?)", (uid, chat_id, job))
+        conn.commit()
+        conn.close()
+        await message.reply(f"✅ Ты устроился на работу **{job.capitalize()}**!\n{BFG_JOBS[job]['emoji']} {BFG_JOBS[job]['desc']}")
+        return
+
+    # Список работ
+    if text_lower == "список работ":
+        txt = "💼 **Доступные работы:**\n\n"
+        for name, data in BFG_JOBS.items():
+            txt += f"{data['emoji']} **{name.capitalize()}** — {data['desc']}\n💰 {data['min']}-{data['max']} монет\n\n"
+        await message.reply(txt, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Работа
+    if text_lower == "работа":
+        await message.reply(await bfg_work(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Шахта
+    if text_lower == "шахта":
+        await message.reply(await bfg_mine(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Рыбалка
+    if text_lower == "рыбалка":
+        await message.reply(await fishing(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Магазин
+    if text_lower == "магазин":
+        await message.reply(await bfg_shop(), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Купить
+    if text_lower.startswith("купить "):
+        item = text_lower[7:].strip()
+        await message.reply(await bfg_buy(uid, chat_id, item), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Инвентарь
+    if text_lower == "инвентарь":
+        await message.reply(await bfg_inventory(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Дуэль
+    if text_lower == "дуэль" and message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        await message.reply(await bfg_duel(uid, chat_id, target_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Ежедневный бонус
+    if text_lower in ["бонус", "ежедневный"]:
+        await message.reply(await bfg_daily(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Кланы
+    if text_lower.startswith("создать клан"):
+        args = text.split(maxsplit=2)
+        if len(args) < 3:
+            await message.reply("ℹ️ `создать клан Название`")
+            return
+        await message.reply(await bfg_clan_create(uid, chat_id, args[2]), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if text_lower.startswith("вступить в клан"):
+        args = text.split(maxsplit=2)
+        if len(args) < 3:
+            await message.reply("ℹ️ `вступить в клан Название`")
+            return
+        await message.reply(await bfg_clan_join(uid, chat_id, args[2]), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if text_lower == "выйти из клана":
+        await message.reply(await bfg_clan_leave(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if text_lower == "мой клан":
+        await message.reply(await bfg_clan_info(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Турниры
+    if text_lower.startswith("создать турнир"):
+        args = text.split()
+        if len(args) >= 3:
+            try:
+                prize = int(args[2])
+                await message.reply(await create_tournament(uid, chat_id, prize), parse_mode=ParseMode.MARKDOWN)
+            except:
+                await message.reply("❌ Введи сумму приза! Пример: `создать турнир 1000`")
+        else:
+            await message.reply("ℹ️ `создать турнир [приз]`")
+        return
+
+    if text_lower == "войти в турнир":
+        await message.reply(await join_tournament(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if text_lower == "турнир бой":
+        await message.reply(await tournament_fight(chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if text_lower == "турнир инфо":
+        await message.reply(await tournament_info(chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Слоты
+    if text_lower.startswith("слоты"):
+        args = text.split()
+        if len(args) >= 2:
+            try:
+                bet = int(args[1])
+                await message.reply(await slots(uid, chat_id, bet), parse_mode=ParseMode.MARKDOWN)
+            except:
+                await message.reply("❌ Введи ставку! Пример: `слоты 50`")
+        else:
+            await message.reply("ℹ️ `слоты [ставка]`")
+        return
+
+    # Стрельба
+    if text_lower == "выстрел":
+        await message.reply(await shoot(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Дом
+    if text_lower.startswith("купить дом"):
+        args = text.split(maxsplit=2)
+        if len(args) < 3:
+            await message.reply("ℹ️ `купить дом [тип]`\nТипы: хижина, дом, особняк, замок")
+            return
+        await message.reply(await buy_house(uid, chat_id, args[2]), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Топ
+    if text_lower == "топ":
+        await message.reply(await leaderboard(chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Статистика
+    if text_lower == "статистика":
+        await message.reply(await game_stats(uid, chat_id), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Баланс
+    if text_lower == "баланс":
+        coins = await get_coins(uid, chat_id)
+        bank = await get_bank_balance(uid, chat_id)
+        await message.reply(f"💰 Монет: **{coins}**\n🏦 В банке: **{bank}** (10%/час)\n⭐ Уровень: {user_level}", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # Брак
+    if text_lower == "брак":
+        if message.reply_to_message:
+            tid = message.reply_to_message.from_user.id
+            if tid == uid:
+                await message.reply("❌ Нельзя жениться на себе!")
+                return
+            if await get_marriage(uid, chat_id):
+                await message.reply("❌ Ты уже в браке!")
+                return
+            if await get_marriage(tid, chat_id):
+                await message.reply("❌ Твой партнёр уже в браке!")
+                return
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💍 ДА", callback_data=f"myes_{chat_id}_{tid}_{uid}")],
+                [InlineKeyboardButton(text="❌ НЕТ", callback_data=f"mno_{chat_id}_{tid}_{uid}")]
+            ])
+            await message.reply(f"💍 {await get_name(uid)} предлагает брак {await get_name(tid)}!", reply_markup=kb)
+        else:
+            marriages = await get_all_marriages(chat_id)
+            if not marriages:
+                await message.reply("💔 В этом чате нет браков!")
+                return
+            txt = "💍 **Браки в чате:**\n\n"
+            for uid_row, sid in marriages:
+                txt += f"💑 {await get_name(uid_row)} + {await get_name(sid)}\n"
+            await message.reply(txt, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if text_lower == "развестись":
+        spouse = await get_marriage(uid, chat_id)
+        if not spouse:
+            await message.reply("❌ Ты не в браке!")
+            return
+        await remove_marriage(uid, chat_id)
+        await remove_marriage(spouse, chat_id)
+        await message.reply(f"💔 {await get_name(uid)} развёлся!")
+        return
+
+    # РП команды
+    for action in RP_ACTIONS:
+        if text_lower == action:
+            if not message.reply_to_message:
+                await message.reply(f"ℹ️ Ответь на сообщение, чтобы выполнить `{action}`")
+                return
+            target_id = message.reply_to_message.from_user.id
+            if target_id == uid:
+                await message.reply("❌ Нельзя с самим собой!")
+                return
+            phrase = random.choice(RP_ACTIONS[action]).format(user=await get_name(uid), target=await get_name(target_id))
+            await message.reply(phrase)
+            return
+
+    # Режимы
+    if text_lower.startswith("режим "):
+        mode = text_lower[6:].strip()
+        if mode in ["normal", "sarcasm", "philosopher", "poet"]:
+            await set_bot_mode(chat_id, mode)
+            await message.reply(f"🎭 Режим изменён на: **{mode}**")
+        return
+
+    # Язык
+    if text_lower.startswith("язык "):
+        lang = text_lower[5:].strip()
+        if lang in ["ru", "en"]:
+            await set_user_lang(uid, lang)
+            await message.reply(f"🌐 Язык изменён на: **{lang.upper()}**")
+        return
+
+    # Команды
+    if text_lower == "команды":
+        await message.reply(
+            f"📋 **{BOT_NAME} — все команды**\n\n"
+            "👤 **Профиль и экономика:**\n"
+            "`профиль` — твой профиль\n"
+            "`баланс` — баланс монет\n"
+            "`бонус` — ежедневный бонус\n"
+            "`магазин` — магазин\n"
+            "`купить [предмет]` — купить предмет\n"
+            "`инвентарь` — твой инвентарь\n"
+            "`положить [сумма]` — положить в банк\n"
+            "`снять [сумма]` — снять из банка\n\n"
+            "💼 **Работа и бизнес:**\n"
+            "`список работ` — доступные работы\n"
+            "`устроиться [работа]` — устроиться на работу\n"
+            "`работа` — работать\n"
+            "`шахта` — добыча ресурсов\n"
+            "`рыбалка` — поймать рыбу\n\n"
+            "🎮 **Игры:**\n"
+            "`слоты [ставка]` — игровые слоты\n"
+            "`выстрел` — стрельба по мишеням\n"
+            "`дуэль` (с ответом) — PVP битва\n"
+            "`монетка` — орёл или решка\n"
+            "`кости` — бросить кости\n"
+            "`деп [сумма]` — угадать число\n\n"
+            "🏆 **Турниры и кланы:**\n"
+            "`создать турнир [приз]` — создать турнир\n"
+            "`войти в турнир` — вступить в турнир\n"
+            "`турнир бой` — начать бои\n"
+            "`турнир инфо` — информация о турнире\n"
+            "`создать клан [название]` — создать клан\n"
+            "`вступить в клан [название]` — вступить в клан\n"
+            "`выйти из клана` — выйти из клана\n"
+            "`мой клан` — информация о клане\n\n"
+            "💬 **Общение с Fable:**\n"
+            "`Fable привет` — просто напиши с обращением Fable\n"
+            "`Fable стих [тема]` — бот напишет стих\n"
+            "`Fable история [тема]` — бот расскажет историю\n"
+            "`Fable совет [тема]` — бот даст совет\n"
+            "`Fable код [запрос]` — бот напишет код\n"
+            "`Fable найди [запрос]` — бот найдёт в интернете\n"
+            "`Fable переведи [текст]` — бот переведёт\n"
+            "`Fable запомни [факт]` — бот запомнит факт о тебе\n"
+            "`Fable что ты знаешь обо мне` — бот покажет факты\n"
+            "`Fable мотивация` — бот даст мотивацию\n\n"
+            "🔧 **Модерация (5+ уровень):**\n"
+            "`бан` (с ответом) — забанить\n"
+            "`разбан` (с ответом) — разбанить\n"
+            "`мут` (с ответом) — замутить\n"
+            "`размут` (с ответом) — размутить\n"
+            "`варн` (с ответом) — предупреждение\n"
+            "`варны` (с ответом) — показать варны\n\n"
+            "👑 **Админ (10 уровень):**\n"
+            "`повысить` (с ответом) — повысить уровень\n"
+            "`понизить` (с ответом) — понизить уровень\n"
+            "`антиспам` — включить/выключить антиспам\n"
+            "`антиссылки` — включить/выключить антиссылки\n"
+            "`модуль [название] [вкл/выкл]` — включить/выключить модуль",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+# ============================================================
+# КОЛБЭКИ
+# ============================================================
+
+@dp.callback_query(lambda c: c.data.startswith("myes_"))
+async def marry_yes(cb: types.CallbackQuery):
+    try:
+        _, cid, tid, pid = cb.data.split("_")
+        cid, tid, pid = int(cid), int(tid), int(pid)
+        if cb.from_user.id != tid:
+            await cb.answer("❌ Это не тебе предлагают!", show_alert=True)
+            return
+        await set_marriage(tid, cid, pid)
+        await set_marriage(pid, cid, tid)
+        await cb.message.edit_text(f"💍 Поздравляем! {await get_name(pid)} и {await get_name(tid)} теперь в браке!")
+        ach = await unlock_achievement(tid, cid, "first_marriage")
+        if ach:
+            await bot.send_message(cid, ach, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        log_error(e, "marry_yes")
+
+@dp.callback_query(lambda c: c.data.startswith("mno_"))
+async def marry_no(cb: types.CallbackQuery):
+    try:
+        _, cid, tid, pid = cb.data.split("_")
+        cid, tid = int(cid), int(tid)
+        if cb.from_user.id != tid:
+            await cb.answer("❌ Это не тебе предлагают!", show_alert=True)
+            return
+        await cb.message.edit_text("❌ Предложение отклонено!")
+    except Exception as e:
+        log_error(e, "marry_no")
+
+# ============================================================
+# ЗАПУСК
+# ============================================================
+
+async def main():
+    try:
+        if not GROQ_API_KEY and not DEEPSEEK_API_KEY:
+            print("⚠️ Нет API ключей! Бот будет работать без AI.")
+        
+        if not init_db():
+            print("❌ Ошибка при инициализации базы данных!")
+            sys.exit(1)
+        
+        asyncio.create_task(add_bank_interest())
+        
+        print(f"✅ {BOT_NAME} успешно запущен!")
+        print(f"🤖 Токен: {'✅' if TOKEN else '❌'}")
+        print(f"🔑 DeepSeek API: {'✅' if DEEPSEEK_API_KEY else '❌'}")
+        print(f"🔑 Groq API: {'✅' if GROQ_API_KEY else '❌'}")
+        print(f"💾 База данных: {'✅' if os.path.exists('fable_bot.db') else '❌'}")
+        print(f"📊 Всего функций: 80+")
+        print(f"🎮 Игровой режим BFG: ✅")
+        
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    except Exception as e:
+        log_error(e, "main")
+        print("❌ Критическая ошибка при запуске!")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
