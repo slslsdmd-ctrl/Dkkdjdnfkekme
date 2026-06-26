@@ -19,6 +19,12 @@ from game_logic import (
     CasinoService, AuctionService, CrimeService, ModerationService,
     ClanService, MarriageService, AchievementService,
     InsuranceService, ReputationService,
+from handlers import (
+    CommandDispatcher, BaseHandler,
+    EconomyHandler, BusinessHandler, MarketHandler,
+    CasinoHandler, ModerationHandler, AdminHandler,
+    SuperAdminHandler, ClanHandler, MarriageHandler,
+)
 )
 from integrations import (
     TelegramBotClient, DeepSeekClient, GrokClient,
