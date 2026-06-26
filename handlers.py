@@ -1,10 +1,3 @@
-📁 ПОЛНЫЙ ФАЙЛ handlers.py (СО ВСЕМИ РЕАЛИСТИЧНЫМИ КОМАНДАМИ)
-
-Просто скопируй и замени свой старый файл:
-
-```python
-# Часть 6: Хендлеры сообщений и обработка команд
-# Модуль: handlers.py
 
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime, timedelta
