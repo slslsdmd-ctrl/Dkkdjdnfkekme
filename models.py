@@ -1,8 +1,4 @@
-Полный файл models.py (Часть 1)
 
-```python
-# Часть 1: Модели данных + конфиги + константы
-# Модуль: models.py
 
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
