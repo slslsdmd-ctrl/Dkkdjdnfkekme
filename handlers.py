@@ -1,8 +1,4 @@
-Полный файл handlers.py (Часть 6)
 
-```python
-# Часть 6: Хендлеры сообщений и обработка команд
-# Модуль: handlers.py
 
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime, timedelta
