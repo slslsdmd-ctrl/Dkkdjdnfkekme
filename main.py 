@@ -1,8 +1,4 @@
-Полный файл main.py (Часть 7 - ПОСЛЕДНИЙ!)
 
-```python
-# Часть 7: Главный модуль бота и точка входа
-# Модуль: main.py
 
 import asyncio
 import logging
