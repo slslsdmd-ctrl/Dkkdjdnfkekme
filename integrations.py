@@ -1,8 +1,3 @@
-Полный файл integrations.py (Часть 4)
-
-```python
-# Часть 4: Интеграции + внешние вызовы
-# Модуль: integrations.py
 
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from datetime import datetime, timedelta
